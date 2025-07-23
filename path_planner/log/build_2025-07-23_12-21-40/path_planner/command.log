@@ -1,0 +1,2 @@
+Invoking command in '/home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com /usr/bin/cmake --build /home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner -- -j22 -l22
+Invoked command in '/home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner' returned '2': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com /usr/bin/cmake --build /home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner -- -j22 -l22

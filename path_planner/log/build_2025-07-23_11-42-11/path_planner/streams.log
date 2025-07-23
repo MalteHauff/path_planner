@@ -1,0 +1,20 @@
+[0.014s] Invoking command in '/home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/jazzy DEBUGINFOD_URLS=https://debuginfod.ubuntu.com /usr/bin/cmake --build /home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner -- -j22 -l22
+[0.047s] -- Found ament_cmake: 2.5.4 (/opt/ros/jazzy/share/ament_cmake/cmake)
+[0.312s] -- Found nav_msgs: 5.3.6 (/opt/ros/jazzy/share/nav_msgs/cmake)
+[0.347s] -- Found rosidl_generator_c: 4.6.5 (/opt/ros/jazzy/share/rosidl_generator_c/cmake)
+[0.359s] -- Found rosidl_generator_cpp: 4.6.5 (/opt/ros/jazzy/share/rosidl_generator_cpp/cmake)
+[0.374s] -- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[0.388s] -- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[0.478s] -- Found rosidl_default_generators: 1.6.0 (/opt/ros/jazzy/share/rosidl_default_generators/cmake)
+[0.506s] -- Found rosidl_adapter: 4.6.5 (/opt/ros/jazzy/share/rosidl_adapter/cmake)
+[0.512s] [31mCMake Error at /opt/ros/jazzy/share/rosidl_cmake/cmake/rosidl_generate_interfaces.cmake:95 (message):
+[0.512s]   rosidl_generate_interfaces() the passed file 'msg/PlotStart.msg' doesn't
+[0.512s]   exist relative to the CMAKE_CURRENT_SOURCE_DIR
+[0.512s]   '/home/malte/Desktop/Work/Development/path_planner/path_planner'
+[0.513s] Call Stack (most recent call first):
+[0.513s]   CMakeLists.txt:29 (rosidl_generate_interfaces)
+[0.513s] 
+[0.513s] [0m
+[0.513s] -- Configuring incomplete, errors occurred!
+[0.520s] gmake: *** [Makefile:267: cmake_check_build_system] Error 1
+[0.525s] Invoked command in '/home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner' returned '2': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/jazzy DEBUGINFOD_URLS=https://debuginfod.ubuntu.com /usr/bin/cmake --build /home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner -- -j22 -l22

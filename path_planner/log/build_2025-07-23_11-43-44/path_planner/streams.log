@@ -1,0 +1,20 @@
+[0.013s] Invoking command in '/home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/jazzy DEBUGINFOD_URLS=https://debuginfod.ubuntu.com /usr/bin/cmake --build /home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner -- -j22 -l22
+[0.040s] -- Found ament_cmake: 2.5.4 (/opt/ros/jazzy/share/ament_cmake/cmake)
+[0.319s] -- Found nav_msgs: 5.3.6 (/opt/ros/jazzy/share/nav_msgs/cmake)
+[0.353s] -- Found rosidl_generator_c: 4.6.5 (/opt/ros/jazzy/share/rosidl_generator_c/cmake)
+[0.363s] -- Found rosidl_generator_cpp: 4.6.5 (/opt/ros/jazzy/share/rosidl_generator_cpp/cmake)
+[0.375s] -- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[0.389s] -- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[0.473s] -- Found rosidl_default_generators: 1.6.0 (/opt/ros/jazzy/share/rosidl_default_generators/cmake)
+[0.481s] -- Found rosidl_adapter: 4.6.5 (/opt/ros/jazzy/share/rosidl_adapter/cmake)
+[0.901s] [31mCMake Error at /opt/ros/jazzy/share/rosidl_cmake/cmake/rosidl_generate_interfaces.cmake:223 (message):
+[0.901s]   Packages installing interfaces must include
+[0.902s]   '<member_of_group>rosidl_interface_packages</member_of_group>' in their
+[0.902s]   package.xml
+[0.902s] Call Stack (most recent call first):
+[0.903s]   CMakeLists.txt:29 (rosidl_generate_interfaces)
+[0.903s] 
+[0.903s] [0m
+[0.903s] -- Configuring incomplete, errors occurred!
+[0.911s] gmake: *** [Makefile:267: cmake_check_build_system] Error 1
+[0.916s] Invoked command in '/home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner' returned '2': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/jazzy DEBUGINFOD_URLS=https://debuginfod.ubuntu.com /usr/bin/cmake --build /home/malte/Desktop/Work/Development/path_planner/path_planner/build/path_planner -- -j22 -l22
