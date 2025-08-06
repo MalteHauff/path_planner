@@ -21,23 +21,6 @@ target_include_directories(global_planner PUBLIC
 target_compile_features(global_planner PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 
 
-set(msg_files
-  "src/msg/PlotStart.msg"
-  "src/msg/PointArray2D.msg"
-  "src/msg/PointWithRotation2D.msg"
-)
-rosidl_generate_interfaces(${PROJECT_NAME}
-  ${msg_files}
-  DEPENDENCIES std_msgs geometry_msgs
-)
-ament_export_dependencies(rosidl_default_runtime)
-add_executable(global_planner src/global_planner.cpp)
-target_include_directories(global_planner PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
-)
-target_compile_features(global_planner PUBLIC c_std_99 cxx_std_17)
-
 
 ament_target_dependencies(global_planner
   rclcpp

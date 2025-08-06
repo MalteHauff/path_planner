@@ -23,7 +23,7 @@
 
 #include <env/OccupancyGrid.h>
 //#include <plotlablib/figurestubfactory.h>
-#include <adore/fun/collision_check_offline.h>
+#include <collision_check_offline.h>
 //#include <adore/fun/vornoi_diagram.h>
 //#include <plotlablib/afigurestub.h>
 #include <geometry_msgs/Pose.h>
