@@ -1,16 +1,3 @@
-/********************************************************************************
- * Copyright (C) 2017-2020 German Aerospace Center (DLR). 
- * Eclipse ADORe, Automated Driving Open Research https://eclipse.org/adore
- *
- * This program and the accompanying materials are made available under the 
- * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * SPDX-License-Identifier: EPL-2.0 
- *
- * Contributors: 
- *    Reza Dariani- initial implementation and API
- ********************************************************************************/
 #pragma once
 
 #include <env/occupancy_grid.h>
@@ -18,222 +5,184 @@
 #include <env/node.h>
 #include <env/search_grid.h>
 #include <hybrid_A_star.h>
-//#include <adore_if_ros_msg/msg/PointArray2D.h>
-//#include <adoreif_ros_msg/msg/PointWithRotation2D.h>
-
 #include <env/OccupancyGrid.h>
-//#include <plotlablib/figurestubfactory.h>
-#include <collision_check_offline.h>
-//#include <adore/fun/vornoi_diagram.h>
-//#include <plotlablib/afigurestub.h>
-#include <geometry_msgs/Pose.h>
-//#include <adore/mad/catmull_rom_splines.h>
+#include <adore/fun/collision_check_offline.h>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <boost/geometry.hpp>
 #include <boost/geometry/strategies/transform/matrix_transformers.hpp>
 #include <boost/geometry/geometries/point_xy.hpp>
 #include <boost/geometry/geometries/polygon.hpp>
 #include <boost/geometry/geometries/multi_polygon.hpp>
 #include <env/trajectory_smoothing.h>
-#include <ctime>
 #include <chrono>
-#include <stdint.h>
-#include <tf/tf.h>
-#include <iterator>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <boost/container/vector.hpp>
-//#include <tf/quaterion.h>
 #include <env/path.h>
-#include <adore_if_ros_msg/PointArray2D.h>
-#include <adore_if_ros_msg/PointWithRotation2D.h>
+#include <adore_if_ros_msg/msg/point_array2_d.hpp>
+#include <adore_if_ros_msg/msg/point_with_rotation2_d.hpp>
+#include <rclcpp/rclcpp.hpp>
 
 namespace adore
 {
- 
 namespace apps
 {
-    /**
-     * 
-     */
-    class GraphSearch
+
+class GraphSearch
+{
+public:
+    GraphSearch(const nav_msgs::msg::OccupancyGrid::SharedPtr &msg,
+                int test,
+                uint32_t height,
+                uint32_t width,
+                rclcpp::Node* parentnode)
+        : grid_height(height), grid_width(width), node_(parentnode)
     {
-        private: 
-        public:        //typedef boost::geometry::model::point<double,2,boost::geometry::cs::cartesian> Vector;
-            //DLR_TS::PlotLab::FigureStubFactory fig_factory;
-            //DLR_TS::PlotLab::AFigureStub* figure3;  
-            //DLR_TS::PlotLab::AFigureStub* figure4; 
-            //DLR_TS::PlotLab::AFigureStub* figure5;         
-            int time1, time2;
-            std::chrono::system_clock::time_point  start;
-            std::chrono::system_clock::time_point  end;        
-            int grid_width = 80; //73;
-            int grid_height = 20;//20;  
-            static const int HeadingResolution = 45;  //5
-            static const int nH_Type = 3;  //non holonomic
-            static const int H_Type = 2;  //holonomic
-            int Depth;      
-            adore::env::OccupanyGrid OG;
-            adore::fun::GRID<adore::fun::Node<nH_Type,double>> NH_GRID;
-            ros::Subscriber StartPose_subscreiber; 
-            ros::Subscriber EndPose_subscreiber; 
-            ros::Publisher path_publisher;
-            //adore::fun::ArrayFormGrid<adore::fun::Node<nH_Type,double>> NH_GRID;
-            adore::fun::Hybrid_A_Star* h_A_star;
-            adore::fun::Node<3,double> Start;
-            adore::fun::Node<3,double> End;
-            bool validStart, validEnd;
-            adore::fun::CollisionCheckOffline* cco;
-            ros::NodeHandle* node_;
-            fun::TrajectorySmoothing* smoothing;
-            TrajectoryVector path; //path to be published
-            double avg_time;
-            float vehicleLength = 0.0;
-            float vehicleWidth = 0.0;
-            int iteration;
-            GraphSearch(const nav_msgs::OccupancyGrid::ConstPtr &msg, int test, uint32_t height, uint32_t width, ros::NodeHandle* parentnode)
-            {
-                std::cout<<"msg data"<<std::endl;
-                std::cout<<"\n \n init search"<<std::endl;
-                grid_height = height;
-                grid_width = width;  
-                //std::cout<< "test" <<std::endl;
-                vehicleLength = 3.2;
-                vehicleWidth = 1.0; 
-                //std::cout<<"start smooth init"<<std::endl;
-                smoothing = new fun::TrajectorySmoothing;
-                //std::cout<<"start a_start init"<<std::endl;
-                h_A_star = new adore::fun::Hybrid_A_Star(smoothing);
-                //std::cout<<"start fig init tesst"<<std::endl;
-                node_ = parentnode;
-                std::cout<<"heigth: " << height << "  width: " << width << std::endl;
-            
-            
-                //figure3 = fig_factory.createFigureStub(3);
-                //std::cout<<"fig3"<<std::endl;
-                //figure3->showAxis();
-                //figure3->showGrid();
-                //figure3->show();  
-                //figure4 = fig_factory.createFigureStub(4);
-                //std::cout<<"fig4"<<std::endl;
-                //figure4->showAxis();
-                //figure4->showGrid();
-                //figure4->show();   
-                //figure5 = fig_factory.createFigureStub(5);
-                //figure5->showAxis();
-                //figure5->showGrid();
-                //figure5->show();              
-                Depth = 360 / HeadingResolution;
-                cco = new adore::fun::CollisionCheckOffline(2, 2, HeadingResolution, 10);
-                std ::cout<<"cco init"<<std::endl;
-                std::cout<<height << width <<std::endl;
-                
-                OG.init(msg, grid_height, grid_width);
-                OG.resize(grid_height,grid_width);
-                std ::cout<<"og init"<<std::endl;
-                NH_GRID.resize(height,width,Depth);
-                std ::cout<<"nh grid init"<<std::endl;
-                h_A_star->setSize(height,width);
-                avg_time = 0.0;
-                iteration = 1;
-                std::cout<<"init search algo end"<<std::endl;
-                path_publisher = node_->advertise<adore_if_ros_msg::PointArray2D>("Path",10,this);
-                
+        vehicleLength = 3.2f;
+        vehicleWidth = 1.0f;
 
-            }
-        void update()
+        smoothing = new fun::TrajectorySmoothing;
+        h_A_star = new adore::fun::Hybrid_A_Star(smoothing);
+
+        Depth = 360 / HeadingResolution;
+        cco = new adore::fun::CollisionCheckOffline(2, 2, HeadingResolution, 10);
+
+        OG.init(msg, grid_height, grid_width);
+        OG.resize(grid_height, grid_width);
+        NH_GRID.resize(height, width, Depth);
+        h_A_star->setSize(height, width);
+
+        avg_time = 0.0;
+        iteration = 1;
+
+        path_publisher_ = node_->create_publisher<adore_if_ros_msg::msg::PointArray2D>("Path", 10);
+
+        start_pose_sub_ = node_->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            "StartPose", 1,
+            std::bind(&GraphSearch::receiveStartPose, this, std::placeholders::_1));
+
+        end_pose_sub_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "EndPose", 1,
+            std::bind(&GraphSearch::receiveEndPose, this, std::placeholders::_1));
+    }
+
+    void update()
+    {
+        RCLCPP_INFO(node_->get_logger(), "GraphSearch update triggered");
+
+        while (iteration < 2 && validStart && validEnd)
         {
-            
-            StartPose_subscreiber= node_->subscribe<geometry_msgs::Pose>("StartPose",1,&GraphSearch::receiveStartPose,this);
-            EndPose_subscreiber= node_->subscribe<geometry_msgs::Pose>("EndPose",1,&GraphSearch::receiveEndPose,this);
-            
+            start = std::chrono::system_clock::now();
 
-            while(iteration<2 && validStart && validEnd)
-            {
+            path = h_A_star->plan(&NH_GRID, &OG, cco, &Start, &End,
+                                  HeadingResolution, 1000, vehicleWidth, vehicleLength);
 
-                std::cout<<"\n ITERATION: "<<iteration;
+            end = std::chrono::system_clock::now();
+            time1 = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+            avg_time += time1;
 
-                start = std::chrono::system_clock::now();
-                time1 = 0.0;
-                time2 = 0.0;
-                std::cout<<"next iteration"<<std::endl;
-                   
-                //std::cout<<"\n"<<   cco->offlineCollisionTable.size()<<"\t"<<cco->offlineCollisionTable[0].size1()<<"\t"<<cco->offlineCollisionTable[0].size2();   
-                path = h_A_star->plan(&NH_GRID,&OG, cco, &Start,&End,HeadingResolution,1000, vehicleWidth, vehicleLength);            
-                end = std::chrono::system_clock::now(); 
-                time1 += std::chrono::duration_cast<std::chrono::microseconds>(end-start).count();   
-                time2 += std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count(); 
-                avg_time += time1;
-                std::cout << "Elapsed time in microseconds (profiler) : "<< time1  << "\n";  
-                //std::cout << "Elapsed time in milliseconds (profiler) : "<< time2  << "\n";    
-                std::cout << "Average time                 (profiler) : "<< (avg_time/iteration)/1000  << "\n";  
-                iteration++; 
-                std::cout<<"graph search path: " <<std::endl;
-                int i  = 0;
-                for (const auto &point : path)
-                {
-                    std::cout << "GraphSearch Test Point : "<<point.x << " "  << point.y<< std::endl;
-                    i++;
-                    if(i > 10) break;
-                }         
-                
-            }
-            if (path.size()>=0){
+            RCLCPP_INFO(node_->get_logger(), "Elapsed time (us): %d", time1);
+            RCLCPP_INFO(node_->get_logger(), "Average time (ms): %.3f", (avg_time / iteration) / 1000.0);
+
+            iteration++;
+
+            if (!path.empty())
                 publishPath();
-            }
-            return;
         }
+    }
 
+private:
+    // ROS2 publishers/subscribers
+    rclcpp::Publisher<adore_if_ros_msg::msg::PointArray2D>::SharedPtr path_publisher_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr start_pose_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr end_pose_sub_;
+    rclcpp::Node* node_;
 
-        void receiveStartPose(geometry_msgs::Pose msg)
-            {
-                        double r,p,y;
-                        tf::Matrix3x3(tf::Quaternion(msg.orientation.x,msg.orientation.y,msg.orientation.z,msg.orientation.w)).getRPY(r,p,y);
-                        if(OG.check_valid_position(msg.position.y,msg.position.x)){
-                            validStart = Start.setPosition(msg.position.x,msg.position.y,y,grid_height,grid_width,Depth,adore::mad::CoordinateConversion::DegToRad(HeadingResolution));
-                        }
-                        else{
-                            std::cout<<"Invalid Start Pose"<<std::endl;
-                        }
-                        //Start.print();
-            }  
-        void receiveEndPose(geometry_msgs::Pose msg)
-            {
-                        double r,p,y;
-                        tf::Matrix3x3(tf::Quaternion(msg.orientation.x,msg.orientation.y,msg.orientation.z,msg.orientation.w)).getRPY(r,p,y);
-                        //std::cout<<msg.position.y<< "   "<<msg.position.x<<std::endl;
-                        if(OG.check_valid_position(msg.position.y,msg.position.x)){
-                            validEnd = End.setPosition(msg.position.x,msg.position.y,y,grid_height,grid_width,Depth, adore::mad::CoordinateConversion::DegToRad(HeadingResolution));
-                        }
-                        else{
-                            std::cout<<"Invalid End Pose"<<std::endl;
-                        }
-                        //End.print();
-            }
+    // Algorithm members
+    int grid_width;
+    int grid_height;
+    static constexpr int HeadingResolution = 45;
+    static constexpr int nH_Type = 3;
+    int Depth;
+    adore::env::OccupanyGrid OG;
+    adore::fun::GRID<adore::fun::Node<nH_Type, double>> NH_GRID;
+    adore::fun::Hybrid_A_Star* h_A_star;
+    adore::fun::Node<3, double> Start;
+    adore::fun::Node<3, double> End;
+    bool validStart = false;
+    bool validEnd = false;
+    adore::fun::CollisionCheckOffline* cco;
+    fun::TrajectorySmoothing* smoothing;
+    TrajectoryVector path;
+    double avg_time;
+    float vehicleLength;
+    float vehicleWidth;
+    int iteration;
+    int time1;
+    std::chrono::system_clock::time_point start, end;
 
-        void publishPath()
-            {
-                // Create the message
-            
-                adore_if_ros_msg::PointArray2D msg;
-                int i = 0;
-                std::cout << "publish path"<<std::endl;
-                for (const auto &point : path)
-                {
-                    adore_if_ros_msg::PointWithRotation2D msg_point;
-                    msg_point.x = point.x;
-                    msg_point.y = point.y;
-                    msg_point.rotation = point.psi;
-                    std::cout << "GraphSearch Test Point : "<<point.x << " "  << point.y<< std::endl;
-                    std::cout << "Msg Point : "<<msg_point.x << " "  << msg_point.y<< std::endl;
-                    i++;
-                    if(i > 10) break;
+    void receiveStartPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+    {
+        double r, p, y;
+        tf2::Quaternion q(
+            msg->pose.pose.orientation.x,
+            msg->pose.pose.orientation.y,
+            msg->pose.pose.orientation.z,
+            msg->pose.pose.orientation.w);
+        tf2::Matrix3x3(q).getRPY(r, p, y);
 
-                    msg.points.push_back(msg_point);
-                }
+        if (OG.check_valid_position(msg->pose.pose.position.y, msg->pose.pose.position.x))
+        {
+            validStart = Start.setPosition(msg->pose.pose.position.x,
+                                           msg->pose.pose.position.y,
+                                           y, grid_height, grid_width, Depth,
+                                           adore::mad::CoordinateConversion::DegToRad(HeadingResolution));
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(), "Invalid Start Pose");
+        }
+    }
 
-                // Publish the message
-                path_publisher.publish(msg);
-            }       
-    };
-}
-}
+    void receiveEndPose(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        double r, p, y;
+        tf2::Quaternion q(
+            msg->pose.orientation.x,
+            msg->pose.orientation.y,
+            msg->pose.orientation.z,
+            msg->pose.orientation.w);
+        tf2::Matrix3x3(q).getRPY(r, p, y);
 
+        if (OG.check_valid_position(msg->pose.position.y, msg->pose.position.x))
+        {
+            validEnd = End.setPosition(msg->pose.position.x,
+                                       msg->pose.position.y,
+                                       y, grid_height, grid_width, Depth,
+                                       adore::mad::CoordinateConversion::DegToRad(HeadingResolution));
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(), "Invalid End Pose");
+        }
+    }
 
+    void publishPath()
+    {
+        adore_if_ros_msg::msg::PointArray2D msg;
+        for (const auto &point : path)
+        {
+            adore_if_ros_msg::msg::PointWithRotation2D msg_point;
+            msg_point.x = point.x;
+            msg_point.y = point.y;
+            msg_point.rotation = point.psi;
+            msg.points.push_back(msg_point);
+        }
+        path_publisher_->publish(msg);
+    }
+};
+
+} // namespace apps
+} // namespace adore

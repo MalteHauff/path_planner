@@ -16,7 +16,7 @@
 #include <boost/numeric/ublas/matrix.hpp>
 #include <boost/numeric/ublas/io.hpp>
 #include <boost/container/vector.hpp>
-#include <mad/arraymatrixtools.h>
+#include <adore/mad/arraymatrixtools.h>
 
 #include <vector>
 namespace adore
