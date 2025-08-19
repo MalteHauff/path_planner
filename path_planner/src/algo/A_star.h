@@ -13,9 +13,9 @@
  ********************************************************************************/
 
 #pragma once
-#include <adore/fun/search_grid.h>
-#include <adore/fun/node.h>
-#include <adore/fun/tree_builder.h>
+#include "../env/search_grid.h"
+#include "../env/node.h"
+#include "../env/tree_builder.h"
 #include <boost/heap/fibonacci_heap.hpp>
 #include <boost/heap/binomial_heap.hpp>
 #include <ctime>

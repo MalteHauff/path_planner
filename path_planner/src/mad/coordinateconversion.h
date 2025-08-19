@@ -28,7 +28,7 @@
 #define sm_b 6356752.314			//Ellipsoid model minor axis
 #define sm_EccSquared 6.69437999013e-03
 #define UTMScaleFactor 0.9996
-#define PI 3.14159265358979
+//#define PI 3.14159265358979
 namespace adore
 {
 	namespace mad
@@ -108,7 +108,7 @@ namespace adore
 			*/
 			static double DegToRad(double deg)
 			{
-				return (deg / 180.0000 * PI);
+				return (deg / 180.0000 * M_PI);
 			}
 			/**
 			* converts radian to degree
@@ -117,7 +117,7 @@ namespace adore
 			*/
 			static double RadToDeg(double rad)
 			{
-				return (rad / PI * 180.0000);
+				return (rad / M_PI * 180.0000);
 			}
 			/**
 			* normalize the radian [-2*pi , 2*pi]
@@ -127,23 +127,23 @@ namespace adore
 			static double twoPIrange(double rad)
 			{
 				double eps = 1.0e-9;
-				if(rad >= 0 && rad <= 2*PI - eps)
+				if(rad >= 0 && rad <= 2*M_PI - eps)
 				{
 					return rad;
 				}
 				else
 				{
-					if(rad > (2*PI - eps) && rad < (2*PI + eps)  )
+					if(rad > (2*M_PI - eps) && rad < (2*M_PI + eps)  )
 					{
 						rad = 0.0;
 					}
-					if(rad > 2*PI)
+					if(rad > 2*M_PI)
 					{
-						rad -= 2*PI;
+						rad -= 2*M_PI;
 					}
 					if(rad < 0)
 					{
-						rad += 2*PI;
+						rad += 2*M_PI;
 					}
 					return twoPIrange (rad);
 				}

@@ -17,8 +17,8 @@ DaR 2016
 */
 #pragma once
 #include <math.h>
-#include <adore/mad/cubicpiecewisefunction.h>
-#include <adore/mad/coordinateconversion.h>
+#include "cubicpiecewisefunction.h"
+#include "coordinateconversion.h"
 #include <dlib/matrix/matrix.h>
 #include <vector>
 # define M_PI           3.14159265358979323846  /* pi */

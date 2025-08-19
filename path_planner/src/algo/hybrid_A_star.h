@@ -13,17 +13,17 @@
  ********************************************************************************/
 
 #pragma once
-#include <env/search_grid.h>
-#include <A_star.h>
-#include <env/node.h>
-#include <env/dubins_curve.h>
+#include "../env/search_grid.h"
+#include "A_star.h"
+#include "../env/node.h"
+#include "../env/dubins_curve.h"
 #include <boost/heap/fibonacci_heap.hpp>
-#include <env/tree_builder.h>
+#include "../env/tree_builder.h"
 //#include <adore/mad/catmull_rom_splines.h>
-#include <env/trajectory_smoothing.h>
+#include "../env/trajectory_smoothing.h"
 #include <cmath>
 #include <boost/container/vector.hpp>
-#include <env/path.h>
+#include "../env/path.h"
 namespace adore
 {
 	namespace fun

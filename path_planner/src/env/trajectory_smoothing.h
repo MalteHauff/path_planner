@@ -1,34 +1,20 @@
-/********************************************************************************
- * Copyright (C) 2017-2020 German Aerospace Center (DLR). 
- * Eclipse ADORe, Automated Driving Open Research https://eclipse.org/adore
- *
- * This program and the accompanying materials are made available under the 
- * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * SPDX-License-Identifier: EPL-2.0 
- *
- * Contributors: 
- *   Reza Dariani - initial API and implementation
- ********************************************************************************/
 #pragma once
 #include <boost/container/vector.hpp>
-#include <tree_builder.h>
-//#include <plotlablib/figurestubfactory.h>
-//#include <plotlablib/afigurestub.h>
-#include <mad/cubicpiecewisefunction.h>
-#include <mad/coordinateconversion.h>
+#include "tree_builder.h"
+#include "../mad/cubicpiecewisefunction.h"
+#include "../mad/coordinateconversion.h"
 #include "csaps.h"
-#include <path.h>
+#include "path.h"
+
 namespace adore
 {
-	namespace fun
-	{
-	   /**
-	   *  ----------------------
-	   */
-       	class TrajectorySmoothing
-		{
+    namespace fun
+    {
+       /**
+       * ----------------------
+       */
+        class TrajectorySmoothing
+        {
             private:
             double pi;
             env::OccupanyGrid::obstacleList obstacles;
@@ -38,11 +24,8 @@ namespace adore
             std::string RED= "LineColor=1.,0.,0.;LineWidth=1";  
             std::string BLUE= "LineColor=0.,0.,1.;LineWidth=2";  
             std::string L_BLUE= "LineColor=0.7,0.7,1.;LineWidth=2"; 
-            //std::string RED= "LineStyle=none;PointSize=4;LineColor=1,0,0";
             std::string GREEN= "LineStyle=none;PointSize=4;LineColor=0,1,0";
             std::string BLACK= "LineColor=0.,0.,0.;LineWidth=1"; 
-            //std::string BLUE= "LineStyle=none;PointSize=4;LineColor=0,0,1";
-            //static const int NumOfPoints = 60;
             static const int OptimizationPoints = 30;
             double const_velocity;
 
@@ -55,8 +38,6 @@ namespace adore
             boost::container::vector<boost::container::vector<double>> parallel_control;
             boost::container::vector<double> control;
             boost::container::vector<double> control_back;
-            //boost::container::vector<double> pre_trajectory_x;
-            //boost::container::vector<double> pre_trajectory_y;
             boost::container::vector<double> obj_F;
             boost::container::vector<double> d_obj_F;
             double obj_F_back;
@@ -66,18 +47,64 @@ namespace adore
             int iteration;
             boost::container::vector<boost::container::vector<double>> states;
             std::vector<double> state_s;
-            static const int nH_Type = 3;  //non holonomic
+            static const int nH_Type = 3;
             static const int nX = 5;
             double vehicleLength;
             double vehicleWidth;
             double dt, dth;
-            //TreeBuilder<nH_Type,double>::TrajectoryVector pre_trajectory;
             TrajectoryVector pre_trajectory;
             struct Circle
             {
                 double x, y, r;
             };  
             boost::container::vector<Circle> egoCircles;
+
+            // Helper function to evaluate spline derivatives
+            csaps::DoubleArray eval_derivative_spline(const csaps::UnivariateCubicSmoothingSpline& spline, const csaps::DoubleArray& xidata, int deriv_order)
+            {
+                csaps::DoubleArray y_deriv(xidata.size());
+                const auto& coeffs = spline.GetCoeffs();
+                const auto& breaks = spline.GetBreaks();
+
+                for (int i = 0; i < xidata.size(); ++i) {
+                    double x_point = xidata(i);
+                    // Find the correct spline piece index
+                    int piece_idx = 0;
+                    for (int j = 0; j < breaks.size() - 1; ++j) {
+                        if (x_point >= breaks(j) && x_point <= breaks(j+1)) {
+                            piece_idx = j;
+                            break;
+                        }
+                    }
+
+                    double a = coeffs(piece_idx, 0);
+                    double b = coeffs(piece_idx, 1);
+                    double c = coeffs(piece_idx, 2);
+                    double d = coeffs(piece_idx, 3);
+                    double dx = x_point - breaks(piece_idx);
+
+                    // Manually calculate the derivatives based on the cubic polynomial
+                    // S(x) = a*(x-xi)^3 + b*(x-xi)^2 + c*(x-xi) + d
+                    switch (deriv_order) {
+                        case 0: // Original value
+                            y_deriv(i) = a*dx*dx*dx + b*dx*dx + c*dx + d;
+                            break;
+                        case 1: // First derivative: S'(x) = 3a*(x-xi)^2 + 2b*(x-xi) + c
+                            y_deriv(i) = 3*a*dx*dx + 2*b*dx + c;
+                            break;
+                        case 2: // Second derivative: S''(x) = 6a*(x-xi) + 2b
+                            y_deriv(i) = 6*a*dx + 2*b;
+                            break;
+                        case 3: // Third derivative: S'''(x) = 6a
+                            y_deriv(i) = 6*a;
+                            break;
+                        default:
+                            y_deriv(i) = 0.0;
+                            break;
+                    }
+                }
+                return y_deriv;
+            }
 
             public:
             TrajectorySmoothing()
@@ -90,9 +117,8 @@ namespace adore
                 Lagrange_mem = 0.0;
                 improvement = 1e3;
                 pi = 3.141592653589793;
-                
             }
-            //void get_pre_trajectory(adore::env::OccupanyGrid* og, TreeBuilder<nH_Type,double>::TrajectoryVector* tree, TreeBuilder<nH_Type,double>::TrajectoryVector* curve, double vehicleWidth, double vehicleLength, DLR_TS::PlotLab::AFigureStub* figure =nullptr,DLR_TS::PlotLab::AFigureStub* figure1 =nullptr)
+
             void get_pre_trajectory(adore::env::OccupanyGrid* og, TrajectoryVector* tree, TrajectoryVector* curve, double vehicleWidth, double vehicleLength)
             {
                 this->vehicleLength = vehicleLength;
@@ -107,19 +133,14 @@ namespace adore
                     poly << "obstPoly"<<i;
                     s_rect<< "obst_s_rect"<<i;
                     s_ellipse<< "obst_s_ellipse"<<i;
-                    //og->plotPolygon(&obstacles[i],figure,poly.str());
-                    //og->plotSoftRectangle(&obstacles[i],figure,s_rect.str());
-                    //og->plotEllipse(&obstacles[i],figure,s_ellipse.str());
-                    //og->calculateCircles(&obstacles[i],figure);
                 }
-                
                 
                 pre_trajectory.insert(pre_trajectory.end(),tree->begin(), tree->end());
                 for(int i=1; i<curve->size(); ++i)
                 {
                     pre_trajectory.push_back((*curve)[i]);
                 }
-                //pre_trajectory.insert(pre_trajectory.end(),curve->begin(), curve->end());
+
                 int p_size = pre_trajectory.size();
                 int N = std::min(OptimizationPoints, p_size);
                 std::cout<<"\nTrajectory size: "<<p_size<<"\toptimization vector size: "<<N;
@@ -141,30 +162,33 @@ namespace adore
                     _s(i) = pre_trajectory[i].s ;
                     _x(i) = pre_trajectory[i].x ;
                     _y(i) = pre_trajectory[i].y ;
-                    //std::cout<<"\n"<<pre_trajectory[i].s - pre_trajectory[i-1].s ;
                 }
-                //double timeHorizon = 5.0;
+                
                 double max_speed = 2.0;
                 const_velocity = pre_trajectory[N-1].s / (N*dt);
                 const_velocity = std::min(const_velocity, max_speed);
                 std::cout<<"\nconst_velocity "<<const_velocity;
                 
                 csaps::UnivariateCubicSmoothingSpline splineX(_s, _x, 0.9);
-                
                 csaps::UnivariateCubicSmoothingSpline splineY(_s, _y, 0.9);
+                
                 csaps::DoubleArray x, dx, ddx, dddx;
                 csaps::DoubleArray y, dy, ddy, dddy ;  
                 csaps::DoubleArray delta, d_delta, dd_delta, ddd_delta ;                       
-                std::tie(x,dx,ddx,dddx) = splineX(N, _s);     
-                std::tie(y,dy,ddy,dddy) = splineY(N, _s);  
+
+                x    = splineX(_s); 
+                dx   = eval_derivative_spline(splineX, _s, 1);
+                ddx  = eval_derivative_spline(splineX, _s, 2);
+                dddx = eval_derivative_spline(splineX, _s, 3); 
+                
+                y    = splineY(_s);
+                dy   = eval_derivative_spline(splineY, _s, 1);
+                ddy  = eval_derivative_spline(splineY, _s, 2);
+                dddy = eval_derivative_spline(splineY, _s, 3); 
                           
-                //csaps::DoubleArray samples_s_; 
-                //samples_s_.resize(OptimizationPoints);
-                //adore::mad::linspace(_s[0], std::min(_s[OptimizationPoints-1],const_velocity*dt*(OptimizationPoints+1)), samples_s_, OptimizationPoints);                  
                 for(int i=0; i<N; ++i) 
                 {
                     _psi(i)=adore::mad::CoordinateConversion::twoPIrange((std::atan2(dy(i),dx(i))));
-
                 }  
                 csaps::UnivariateCubicSmoothingSpline splinePSI(_s, _psi, 0.9);                 
                 for(int i=0; i<N; ++i) 
@@ -174,11 +198,14 @@ namespace adore
                 for(int i=0; i<N; ++i) 
                 {                
                     _delta(i)= std::atan((vehicleLength)  * _k(i)); 
-                    
                 }  
                 csaps::UnivariateCubicSmoothingSpline splineD(_s, _delta, 0.95);  
-                std::tie(delta,d_delta,dd_delta,ddd_delta) = splineD(N, _s); 
-                //figure1->plot("#rsa",&_s(0),&_delta(0), 1.1, N, BLACK); 
+
+                delta   = splineD(_s); 
+                d_delta = eval_derivative_spline(splineD, _s, 1);
+                dd_delta = eval_derivative_spline(splineD, _s, 2);
+                ddd_delta = eval_derivative_spline(splineD, _s, 3);
+                
                 auto d_coefs = splineD.GetCoeffs();
                 auto d_breaks = splineD.GetBreaks();                
                 toPolynom(N,&pp_d,d_breaks, d_coefs);
@@ -192,26 +219,21 @@ namespace adore
                 auto p_breaks = splinePSI.GetBreaks();                
                 toPolynom(N,&pp_psi,p_breaks, p_coefs);
                 std::cout<<"\nPre trajectory is loaded\n";  
-                //figure->plot("#rst",&x(0),&y(0), 1.1, N, BLACK); 
-                //optimization
                
                 initHorizon(N,og); 
                 integrate(N,og,&control,L_BLUE,true); 
                 createParallelSystems(N,&control);
-                while(improvement > 1e-5) // || iteration>100)
+                while(improvement > 1e-5)
                 {
-                    
                     optimize(N,og);
-                    
                     iteration++; 
                     if(iteration > 150) break;
                 }  
-                //figure1->plot("#opt_sa",&_s(0),&control[0], 1.1, N, BLUE); 
+
                 std::cout<<std::fixed<<"\n"<<iteration<<"\t"<<states[L].back() <<"\t"<<improvement<<"\n"; 
                 integrate(N,og,&control,BLUE,true); 
-               
-                                        
             }
+
             private:
             void optimize(int N, adore::env::OccupanyGrid* og)
             {

@@ -18,9 +18,9 @@
 #include <boost/geometry/geometries/point_xy.hpp>
 #include <boost/geometry/geometries/polygon.hpp>
 #include <boost/geometry/geometries/multi_polygon.hpp>
-#include <mad/coordinateconversion.h>
+#include "../mad/coordinateconversion.h"
 #include <boost/numeric/ublas/matrix.hpp>
-
+#include <Eigen/Dense> 
 namespace adore
 {
 	namespace fun

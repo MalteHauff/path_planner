@@ -20,7 +20,8 @@
 #include <boost/container/vector.hpp>
 #include <eigen3/Eigen/Dense>
 
-#include <nav_msgs/OccupancyGrid.h>
+#include <nav_msgs/msg/occupancy_grid.hpp>
+
 #include <stdint.h>
 
 //#include <adore/fun
@@ -60,8 +61,9 @@ namespace adore
                 double pi;
                 uint32_t width;
                 uint32_t height;
-                void init(const nav_msgs::OccupancyGrid::ConstPtr &msg, uint32_t h, uint32_t w) //int8_t data[], 
-                {
+                // Option A (keeps using msg->data inside function)
+                void init(const nav_msgs::msg::OccupancyGrid::ConstSharedPtr &msg, uint32_t h, uint32_t w)
+                    {
                     std::cout<<"start og init"<<std::endl;  
                     height = h;
                     width = w; 

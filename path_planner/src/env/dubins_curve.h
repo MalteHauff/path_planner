@@ -13,13 +13,13 @@
  ********************************************************************************/
 
 #pragma once
-#include <node.h>
-#include <mad/arraymatrixtools.h>
+#include "node.h"
+#include "../mad/arraymatrixtools.h"
 //#include <adore/apps/if_plotlab/plot_shape.h>
 #include <boost/container/vector.hpp>
-#include <tree_builder.h>
+#include "tree_builder.h"
 #include <complex>
-#include <path.h>
+#include "path.h"
 namespace adore
 {
 	namespace fun

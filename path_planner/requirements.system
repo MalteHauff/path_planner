@@ -9,3 +9,28 @@ ros-${ROS_DISTRO}-rclcpp
 ros-${ROS_DISTRO}-std-msgs
 ros-${ROS_DISTRO}-ament-lint-auto
 ros-${ROS_DISTRO}-ament-cmake-gtest
+libdlib-dev
+cmake
+build-essential
+git
+
+
+libeigen3-dev
+libboost-all-dev
+libxerces-c-dev
+xsdcxx
+
+# requirements for dlib
+libblas-dev
+libopenblas-dev
+liblapack-dev
+
+libeigen3-dev
+libboost-all-dev
+libxerces-c-dev
+xsdcxx
+
+# requirements for dlib
+libblas-dev
+libopenblas-dev
+liblapack-dev

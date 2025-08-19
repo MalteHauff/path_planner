@@ -22,7 +22,7 @@
 #include <iomanip>
 #include "dlib/matrix/matrix.h"
 #include "dlib/matrix.h"
-#include <adore/mad/arraymatrixtools.h>
+#include "arraymatrixtools.h"
 #include <vector>
 namespace adore
 {

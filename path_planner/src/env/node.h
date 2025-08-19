@@ -13,14 +13,14 @@
  ********************************************************************************/
 
 #pragma once
-#include <algo/collision_check_offline.h>
+#include "../algo/collision_check_offline.h"
 //#include <plotlablib/afigurestub.h>
 //#include <plotlablib/figurestubfactory.h>
 //#include <adore/apps/if_plotlab/plot_shape.h>
-#include <mad/coordinateconversion.h>
-#include <mad/arraymatrixtools.h>
-
-
+#include "../mad/coordinateconversion.h"
+#include "../mad/arraymatrixtools.h"
+#include "occupancy_grid.h"
+#include <math.h>
 
 namespace adore
 {
@@ -130,7 +130,7 @@ namespace adore
         }
         bool hasEqualIndex(Node* node, double headingResolution)
         {
-            return(((std::fmod(node->psi,2.0*PI) /headingResolution) == (std::fmod(this->psi,2.0*PI) /headingResolution)) 
+            return(((std::fmod(node->psi,2.0*M_PI) /headingResolution) == (std::fmod(this->psi,2.0*M_PI) /headingResolution)) 
                     && (int(node->y) == int(this->y)) && (int(node->x) == int(this->x)) ); 
         }
         bool isEqual (Node* node, double headingResolution = 5.0, double tolerance = 0.1) //tolerance = 0.1
@@ -142,7 +142,7 @@ namespace adore
             }
             if(this->type == 3 && std::abs(this->x - node->x) < tolerance && 
                 std::abs(this->y - node->y) < tolerance &&
-               ( std::abs(this->psi - node->psi) <= headingResolution || std::abs(this->psi - node->psi) >= 2*PI - headingResolution) ) 
+               ( std::abs(this->psi - node->psi) <= headingResolution || std::abs(this->psi - node->psi) >= 2*M_PI - headingResolution) ) 
             {
                 result = true;
             }  
