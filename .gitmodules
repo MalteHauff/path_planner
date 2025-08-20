@@ -1,0 +1,3 @@
+[submodule "path_planner/third_party/csaps"]
+	path = path_planner/third_party/csaps
+	url = git@github.com:DLR-TS/csaps-cpp.git
