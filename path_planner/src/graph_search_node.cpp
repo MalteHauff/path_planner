@@ -1,11 +1,23 @@
 // graph_search_node.cpp
 //
-// Merged GraphSearch + GraphSearchNode into a single ROS2 node file.
-// Keeps your original project structure and types (OccupanyGrid, GRID, Hybrid_A_Star, TrajectorySmoothing).
+// GraphSearchNode: ROS2 node that wraps ADORe Hybrid A* planner.
 //
-// NOTE: This file assumes your other headers/classes (TrajectorySmoothing, Hybrid_A_Star,
-//       OccupanyGrid, Node, GRID, CollisionCheckOffline, TrajectoryVector, etc.) exist
-//       and are already adapted (e.g. csaps fixes applied inside TrajectorySmoothing).
+// This file is an updated drop-in replacement for your previous GraphSearchNode.
+// Key changes:
+//  - store map origin + resolution on map receive
+//  - convert world->grid (floating cell coords) before calling Node::setPosition
+//  - validate using OG.worldToGrid() and OG.check_valid_position(row,col)
+//  - convert planner path points (grid units) back to world meters on publish
+//  - improved logging
+//
+// Notes:
+//  - Node::setPosition expects Width=rows, Length=cols, Depth, HeadingResolutionRad
+//  - map cell coordinate convention: cell_x = (world_x - origin_x) / resolution (column index)
+//                        cell_y = (world_y - origin_y) / resolution (row index)
+//  - If your map origin has rotation (non-identity quaternion), OG.worldToGrid is used for validation.
+//    If OG.worldToGrid already rotates the point internally, the simple cell_x/cell_y conversion is still valid
+//    using the stored origin/resolution. If you observe offset/rotation issues, we may need to transform world->map
+//    using the origin orientation explicitly (I can provide that patch if needed).
 
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -15,13 +27,15 @@
 #include <geometry_msgs/msg/pose.hpp>
 
 #include <tf2/LinearMath/Quaternion.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <chrono>
 #include <memory>
 #include <mutex>
 
-// project headers (adjust include paths if needed)
 #include "env/occupancy_grid.h"
 #include "env/node.h"
 #include "env/search_grid.h"
@@ -29,6 +43,8 @@
 #include "algo/collision_check_offline.h"
 #include "env/trajectory_smoothing.h"
 #include "env/path.h"
+
+using namespace std::chrono_literals;
 
 namespace adore {
 namespace if_ROS {
@@ -51,11 +67,10 @@ public:
     validStart(false),
     validEnd(false),
     iteration(1),
-    avg_time_us(0)
+    avg_time_us(0.0)
   {
     RCLCPP_INFO(this->get_logger(), "GraphSearchNode constructor called");
 
-    // QoS 10 (history keep last 10)
     rclcpp::QoS qos(10);
 
     map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
@@ -65,9 +80,12 @@ public:
       "pose", qos, std::bind(&GraphSearchNode::receiveStartPose, this, std::placeholders::_1));
 
     goal_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
-      "goalpose", qos, std::bind(&GraphSearchNode::receiveEndPose, this, std::placeholders::_1));
+      "goal_pose", qos, std::bind(&GraphSearchNode::receiveEndPose, this, std::placeholders::_1));
 
-    path_publisher_ = this->create_publisher<nav_msgs::msg::Path>("Path", qos);
+    path_publisher_ = this->create_publisher<nav_msgs::msg::Path>("external_path_from_ros1", qos);
+
+    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
     RCLCPP_INFO(this->get_logger(), "GraphSearchNode initialized");
   }
@@ -88,7 +106,6 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher_;
 
   // ---------- Graph search components ----------
-  static constexpr int HeadingResolutionConst = 45; // kept for reference
   const int HeadingResolution;
   int Depth;
 
@@ -102,7 +119,7 @@ private:
   adore::fun::CollisionCheckOffline* cco;
   adore::fun::TrajectorySmoothing* smoothing;
 
-  // start/goal nodes
+  // start/goal nodes (in grid units after setPosition)
   adore::fun::Node<3, double> Start;
   adore::fun::Node<3, double> End;
 
@@ -114,6 +131,11 @@ private:
   bool validStart;
   bool validEnd;
 
+  // map origin + resolution for conversions
+  double map_origin_x_ = 0.0;
+  double map_origin_y_ = 0.0;
+  double map_resolution_ = 0.0;
+
   // bookkeeping
   double avg_time_us;
   int iteration;
@@ -121,14 +143,16 @@ private:
   double vehicleWidth;
   int time_us;
 
-  // mutex to protect members modified in callbacks
   std::mutex mutex_;
 
-  // store last poses for republishing or planning
   geometry_msgs::msg::Pose start_pose_;
   geometry_msgs::msg::Pose goal_pose_;
 
-  // ---------- Callbacks and helpers ----------
+  // tf2
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+  
   void receive_map_data(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
   {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -154,10 +178,16 @@ private:
       h_A_star = new adore::fun::Hybrid_A_Star(smoothing);
       h_A_star->setSize(grid_height_, grid_width_);
 
-      // collision checker: adjust parameters to your needs
+      // collision checker: parameters as before
       cco = new adore::fun::CollisionCheckOffline(2, 2, HeadingResolution, 10);
 
+      // store map origin & resolution (used to convert world <-> grid)
+      map_origin_x_ = msg->info.origin.position.x;
+      map_origin_y_ = msg->info.origin.position.y;
+      map_resolution_ = msg->info.resolution;
+
       RCLCPP_INFO(this->get_logger(), "Map initialized: width=%u height=%u Depth=%d", grid_width_, grid_height_, Depth);
+      RCLCPP_INFO(this->get_logger(), "Map origin (m)=(%.6f, %.6f) resolution=%.6f", map_origin_x_, map_origin_y_, map_resolution_);
     }
 
     // Optionally plan immediately if both start and goal already known
@@ -169,37 +199,69 @@ private:
 
   void receiveStartPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
   {
+    RCLCPP_INFO(this->get_logger(), "receive start pose");
     std::lock_guard<std::mutex> lk(mutex_);
+
+    std::string target_frame = "map";
+    geometry_msgs::msg::PoseWithCovarianceStamped pose_in_map = *msg;
+
+    if (msg->header.frame_id != target_frame) {
+      try {
+        auto tf = tf_buffer_->lookupTransform(
+          target_frame, msg->header.frame_id, tf2::TimePointZero, std::chrono::milliseconds(100));
+        tf2::doTransform(*msg, pose_in_map, tf);
+      } catch (const tf2::TransformException &ex) {
+        RCLCPP_WARN(this->get_logger(), "Could not transform start pose: %s", ex.what());
+        validStart = false;
+        return;
+      }
+    }
+
     double r, p, y;
     tf2::Quaternion q(
-      msg->pose.pose.orientation.x,
-      msg->pose.pose.orientation.y,
-      msg->pose.pose.orientation.z,
-      msg->pose.pose.orientation.w);
+      pose_in_map.pose.pose.orientation.x,
+      pose_in_map.pose.pose.orientation.y,
+      pose_in_map.pose.pose.orientation.z,
+      pose_in_map.pose.pose.orientation.w);
     tf2::Matrix3x3(q).getRPY(r, p, y);
 
-    if (OG.check_valid_position(msg->pose.pose.position.y, msg->pose.pose.position.x))
-    {
-      // setPosition(x, y, yaw, grid_h, grid_w, depth, heading_resolution_in_radians)
-      validStart = Start.setPosition(
-        msg->pose.pose.position.x,
-        msg->pose.pose.position.y,
-        y,
-        grid_height_,
-        grid_width_,
-        Depth,
-        adore::mad::CoordinateConversion::DegToRad(HeadingResolution)
-      );
-      start_pose_ = msg->pose.pose;
+    double wx = pose_in_map.pose.pose.position.x;
+    double wy = pose_in_map.pose.pose.position.y;
 
-      RCLCPP_INFO(this->get_logger(), "Received valid start pose (x=%f y=%f yaw=%f) validStart=%d",
-                  start_pose_.position.x, start_pose_.position.y, y, validStart);
-    }
-    else
-    {
-      RCLCPP_WARN(this->get_logger(), "Invalid Start Pose received");
+    RCLCPP_INFO(this->get_logger(), "Received start pose: world x=%.6f, y=%.6f, yaw=%.6f", wx, wy, y);
+
+    // Convert world -> integer grid indices for validation
+    int row = -1, col = -1;
+    if (!OG.worldToGrid(wx, wy, row, col)) {
+      RCLCPP_WARN(this->get_logger(), "Start pose outside map bounds (world x=%.6f y=%.6f)", wx, wy);
       validStart = false;
+      return;
     }
+
+    RCLCPP_INFO(this->get_logger(), "Start maps to grid (row=%d, col=%d)", row, col);
+
+    if (!OG.check_valid_position(row, col)) {
+      RCLCPP_WARN(this->get_logger(), "Start pose maps to an occupied/unknown grid cell (r=%d c=%d)", row, col);
+      validStart = false;
+      return;
+    }
+
+    // Convert world -> floating cell coordinates (column, row)
+    // cell_x = (world_x - origin_x) / resolution
+    double cell_x = (wx - map_origin_x_) / map_resolution_;
+    double cell_y = (wy - map_origin_y_) / map_resolution_;
+
+    double heading_rad = adore::mad::CoordinateConversion::DegToRad(HeadingResolution);
+
+    // Node::setPosition expects Width=rows, Length=cols, Depth, HeadingResolutionRad
+    validStart = Start.setPosition(cell_x, cell_y, y, grid_height_, grid_width_, Depth, heading_rad);
+    if (!validStart) {
+      RCLCPP_WARN(this->get_logger(), "Start.setPosition rejected (cell_x=%.6f, cell_y=%.6f)", cell_x, cell_y);
+      return;
+    }
+
+    start_pose_ = pose_in_map.pose.pose;
+    RCLCPP_INFO(this->get_logger(), "Received valid start pose (cell x=%.6f y=%.6f) validStart=%d", cell_x, cell_y, validStart);
 
     if (first_map_received_ && validStart && validEnd) {
       planAndPublish();
@@ -209,34 +271,65 @@ private:
   void receiveEndPose(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
   {
     std::lock_guard<std::mutex> lk(mutex_);
+
+    std::string target_frame = "map";
+    geometry_msgs::msg::PoseStamped pose_in_map = *msg;
+
+    if (msg->header.frame_id != target_frame) {
+      try {
+        auto tf = tf_buffer_->lookupTransform(
+          target_frame, msg->header.frame_id, tf2::TimePointZero, std::chrono::milliseconds(100));
+        tf2::doTransform(*msg, pose_in_map, tf);
+      } catch (const tf2::TransformException &ex) {
+        RCLCPP_WARN(this->get_logger(), "Could not transform goal pose: %s", ex.what());
+        validEnd = false;
+        return;
+      }
+    }
+
     double r, p, y;
     tf2::Quaternion q(
-      msg->pose.orientation.x,
-      msg->pose.orientation.y,
-      msg->pose.orientation.z,
-      msg->pose.orientation.w);
+      pose_in_map.pose.orientation.x,
+      pose_in_map.pose.orientation.y,
+      pose_in_map.pose.orientation.z,
+      pose_in_map.pose.orientation.w);
     tf2::Matrix3x3(q).getRPY(r, p, y);
 
-    if (OG.check_valid_position(msg->pose.position.y, msg->pose.position.x))
-    {
-      validEnd = End.setPosition(
-        msg->pose.position.x,
-        msg->pose.position.y,
-        y,
-        grid_height_,
-        grid_width_,
-        Depth,
-        adore::mad::CoordinateConversion::DegToRad(HeadingResolution)
-      );
-      goal_pose_ = msg->pose;
-      RCLCPP_INFO(this->get_logger(), "Received valid goal pose (x=%f y=%f yaw=%f) validEnd=%d",
-                  goal_pose_.position.x, goal_pose_.position.y, y, validEnd);
-    }
-    else
-    {
-      RCLCPP_WARN(this->get_logger(), "Invalid End Pose received");
+    double wx = pose_in_map.pose.position.x;
+    double wy = pose_in_map.pose.position.y;
+
+    RCLCPP_INFO(this->get_logger(), "Received goal pose (world): x=%.6f, y=%.6f, yaw=%.6f", wx, wy, y);
+
+    // Convert world -> grid indices
+    int row = -1, col = -1;
+    if (!OG.worldToGrid(wx, wy, row, col)) {
+      RCLCPP_WARN(this->get_logger(), "Goal pose outside map bounds (world x=%.6f y=%.6f)", wx, wy);
       validEnd = false;
+      return;
     }
+
+    RCLCPP_INFO(this->get_logger(), "Goal maps to grid (row=%d, col=%d)", row, col);
+
+    if (!OG.check_valid_position(row, col)) {
+      RCLCPP_WARN(this->get_logger(), "Goal pose maps to an occupied/unknown grid cell (r=%d c=%d)", row, col);
+      validEnd = false;
+      return;
+    }
+
+    // Convert to floating cell coords
+    double cell_x = (wx - map_origin_x_) / map_resolution_;
+    double cell_y = (wy - map_origin_y_) / map_resolution_;
+
+    double heading_rad = adore::mad::CoordinateConversion::DegToRad(HeadingResolution);
+
+    validEnd = End.setPosition(cell_x, cell_y, y, grid_height_, grid_width_, Depth, heading_rad);
+    if (!validEnd) {
+      RCLCPP_WARN(this->get_logger(), "End.setPosition rejected (cell_x=%.6f, cell_y=%.6f)", cell_x, cell_y);
+      return;
+    }
+
+    goal_pose_ = pose_in_map.pose;
+    RCLCPP_INFO(this->get_logger(), "Received valid goal pose (cell x=%.6f y=%.6f) validEnd=%d", cell_x, cell_y, validEnd);
 
     if (first_map_received_ && validStart && validEnd) {
       planAndPublish();
@@ -245,14 +338,9 @@ private:
 
   void planAndPublish()
   {
-    // Must hold mutex when calling into h_A_star because other callbacks can race.
-    // If h_A_star is slow you may wish to release the mutex during plan call and
-    // guard shared state separately; here we keep it simple and blocking.
+    // plan synchronously while holding mutex - simple and deterministic
     auto t0 = std::chrono::high_resolution_clock::now();
 
-    // Plan: use Hybrid_A_Star::plan(...) signature you had earlier.
-    // path = h_A_star->plan(&NH_GRID, &OG, cco, &Start, &End, HeadingResolution, 1000, vehicleWidth, vehicleLength);
-    // Note: exact function signature may differ in your repo — adapt args if necessary.
     path = h_A_star->plan(&NH_GRID, &OG, cco, &Start, &End, HeadingResolution, 1000, vehicleWidth, vehicleLength);
 
     auto t1 = std::chrono::high_resolution_clock::now();
@@ -260,9 +348,11 @@ private:
     avg_time_us += elapsed_us;
     iteration++;
 
-    RCLCPP_INFO(this->get_logger(), "Plan finished in %lld us (avg %f us over %d iters). Path size: %zu",
+    RCLCPP_INFO(this->get_logger(), "Plan finished in %lld us (avg %.3f us over %d iters). Path size: %zu",
                 static_cast<long long>(elapsed_us), avg_time_us / std::max(1, iteration), iteration, path.size());
-
+    
+    validStart = false;
+    validEnd = false;
     if (!path.empty())
     {
       publishPath();
@@ -281,11 +371,15 @@ private:
 
     for (const auto &point : path)
     {
+      // Convert planner grid units (cell coordinates) back to world meters
+      double world_x = map_origin_x_ + point.x * map_resolution_;
+      double world_y = map_origin_y_ + point.y * map_resolution_;
+
       geometry_msgs::msg::PoseStamped pose_stamped;
       pose_stamped.header.stamp = this->now();
       pose_stamped.header.frame_id = "map";
-      pose_stamped.pose.position.x = point.x;
-      pose_stamped.pose.position.y = point.y;
+      pose_stamped.pose.position.x = world_x;
+      pose_stamped.pose.position.y = world_y;
       pose_stamped.pose.position.z = 0.0;
 
       tf2::Quaternion q;
@@ -301,6 +395,7 @@ private:
     path_publisher_->publish(msg);
     RCLCPP_INFO(this->get_logger(), "Published path with %zu poses", msg.poses.size());
   }
+
 };
 
 } // namespace if_ROS

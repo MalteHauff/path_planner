@@ -62,34 +62,55 @@ namespace adore
                 uint32_t width;
                 uint32_t height;
                 // Option A (keeps using msg->data inside function)
+                // add these members to class (near width/height)
+                double resolution = 0.0;
+                double origin_x = 0.0;
+                double origin_y = 0.0;
+
+                // Replace your init method with this corrected version:
                 void init(const nav_msgs::msg::OccupancyGrid::ConstSharedPtr &msg, uint32_t h, uint32_t w)
-                    {
-                    std::cout<<"start og init"<<std::endl;  
+                {
+                    std::cout << "start og init" << std::endl;
                     height = h;
-                    width = w; 
+                    width = w;
                     pi = 3.141592653589793;
-                    std::cout<< height << width <<std::endl;
-                    Grid = Eigen::MatrixXd::Zero(height,width); //
-                    std::cout << "matrix init finished" << std::endl;
-                    
-                    for (int r=0; r<Grid.rows(); r++)
-                    
-                    {                    
-                        for(int c=0; c<Grid.cols(); c++)
+
+                    // store meta info for coordinate conversions
+                    resolution = msg->info.resolution;
+                    origin_x = msg->info.origin.position.x;
+                    origin_y = msg->info.origin.position.y;
+
+                    std::cout << "height " << height << " width " << width
+                            << " res " << resolution
+                            << " origin(" << origin_x << "," << origin_y << ")" << std::endl;
+
+                    Grid = Eigen::MatrixXd::Zero(height, width);
+
+                    // msg->data is row-major with index = x + y*width, where x in [0,width-1], y in [0,height-1]
+                    for (uint32_t y = 0; y < height; ++y)
+                    {
+                        for (uint32_t x = 0; x < width; ++x)
                         {
-                            if(msg->data[r*Grid.cols()+c]==0){
-                                Grid(r,c) = 1;//msg->data[r*Grid.cols()+c];
+                            int idx = static_cast<int>(x + y * width);
+                            int8_t v = msg->data[idx];
+
+                            // normalize to: 0 = FREE, 1 = OCCUPIED, -1 = UNKNOWN
+                            if (v == 0)
+                            {
+                                Grid(y, x) = 0; // FREE
                             }
-                            else if(msg->data[r*Grid.cols()+c]==-2){
-                                Grid(r,c) = 0;//msg->data[r*Grid.cols()+c];
+                            else if (v == -1)
+                            {
+                                Grid(y, x) = -1; // UNKNOWN
                             }
-                            else{
-                                Grid(r,c) = -1;//msg->data[r*Grid.cols()+c];
+                            else
+                            {
+                                Grid(y, x) = 1; // OCCUPIED (usually v==100)
                             }
-                            //std::cout<<Grid(r,c)<<std::endl;
                         }
                     }
                 }
+
                 
                 boost::container::vector<_Obstacle> get_obstacles()
                 {
@@ -209,21 +230,32 @@ namespace adore
                     x = x_o  *cos(theta) - y_o  * sin(theta) ;
                     y = x_o  *sin(theta) + y_o  * cos(theta) ;
                 } 
-                bool check_valid_position(int row, int col){
-                    //std::cout<<"start check "<<std::endl;
-                    if(! point_inside(row, col)) {
-                        //std::cout<<"Point is not inside the recorded area"<<std::endl;
+                // Add helper to convert world coords (meters) -> grid indices (row, col)
+                bool worldToGrid(double world_x, double world_y, int &row, int &col) const
+                {
+                    // compute grid indices using stored origin and resolution
+                    // col = x_index, row = y_index
+                    if (resolution <= 0.0) return false;
+                    col = static_cast<int>(std::floor((world_x - origin_x) / resolution));
+                    row = static_cast<int>(std::floor((world_y - origin_y) / resolution));
+                    return point_inside(row, col);
+                }
+
+                bool check_valid_position(int row, int col) const
+                {
+                    if (!point_inside(row, col)) {
                         return false;
                     }
-                    //std::cout<<" row col: " <<Grid(row,col)<<std::endl;
-                    //std::cout<<" col row: " <<Grid(col, row)<<std::endl;
-                    return Grid(row,col) == 0;
+                    // FREE cells are 0
+                    return Grid(row, col) == 0;
                 }
-                bool point_inside(int row, int col){
-                    //return row >= 0 && row < width && col >= 0 && col <= height;
-                    //std::cout<< "point inside: row "<< row << "  height  " << height << "  col  " << col << " width  " << width<<std::endl;
-                    return row >= 0 && row < height && col >= 0 && col <= width;
-                }          
+
+                bool point_inside(int row, int col) const
+                {
+                    // row in [0, height-1], col in [0, width-1]
+                    return row >= 0 && row < static_cast<int>(height) && col >= 0 && col < static_cast<int>(width);
+                }
+  
             private:
                 std::string GREEN= "LineColor=0.,1.,0.;LineWidth=5";
                 std::string RED= "LineColor=1.,0.,0.;LineWidth=5";

@@ -26,7 +26,7 @@ namespace adore
             std::string L_BLUE= "LineColor=0.7,0.7,1.;LineWidth=2"; 
             std::string GREEN= "LineStyle=none;PointSize=4;LineColor=0,1,0";
             std::string BLACK= "LineColor=0.,0.,0.;LineWidth=1"; 
-            static const int OptimizationPoints = 30;
+            inline static const int OptimizationPoints = 30;
             double const_velocity;
 
             double coef1[OptimizationPoints];
@@ -176,15 +176,8 @@ namespace adore
                 csaps::DoubleArray y, dy, ddy, dddy ;  
                 csaps::DoubleArray delta, d_delta, dd_delta, ddd_delta ;                       
 
-                x    = splineX(_s); 
-                dx   = eval_derivative_spline(splineX, _s, 1);
-                ddx  = eval_derivative_spline(splineX, _s, 2);
-                dddx = eval_derivative_spline(splineX, _s, 3); 
-                
-                y    = splineY(_s);
-                dy   = eval_derivative_spline(splineY, _s, 1);
-                ddy  = eval_derivative_spline(splineY, _s, 2);
-                dddy = eval_derivative_spline(splineY, _s, 3); 
+                std::tie(x,dx,ddx,dddx) = splineX(N, _s);     
+                std::tie(y,dy,ddy,dddy) = splineY(N, _s);  
                           
                 for(int i=0; i<N; ++i) 
                 {
@@ -201,10 +194,7 @@ namespace adore
                 }  
                 csaps::UnivariateCubicSmoothingSpline splineD(_s, _delta, 0.95);  
 
-                delta   = splineD(_s); 
-                d_delta = eval_derivative_spline(splineD, _s, 1);
-                dd_delta = eval_derivative_spline(splineD, _s, 2);
-                ddd_delta = eval_derivative_spline(splineD, _s, 3);
+                std::tie(delta,d_delta,dd_delta,ddd_delta) = splineD(N, _s); 
                 
                 auto d_coefs = splineD.GetCoeffs();
                 auto d_breaks = splineD.GetBreaks();                

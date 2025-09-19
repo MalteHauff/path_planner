@@ -1,256 +1,276 @@
-/********************************************************************************
- * Copyright (C) 2017-2020 German Aerospace Center (DLR). 
- * Eclipse ADORe, Automated Driving Open Research https://eclipse.org/adore
- *
- * This program and the accompanying materials are made available under the 
- * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * SPDX-License-Identifier: EPL-2.0 
- *
- * Contributors: 
- *   Reza Dariani - initial API and implementation
- ********************************************************************************/
-
 #pragma once
-#include <boost/numeric/ublas/matrix.hpp>
-#include <boost/numeric/ublas/io.hpp>
-#include <boost/container/vector.hpp>
-#include "../mad/arraymatrixtools.h"
 
 #include <vector>
-namespace adore
+#include <cfloat>
+#include <cassert>
+#include <iostream>
+
+namespace adore {
+namespace fun {
+
+/**
+ * Simple GRID container that stores pointers to Node objects in a 3D (width x length x depth)
+ * layout, with ownership: the grid owns stored pointers and will delete them when replaced.
+ *
+ * Coordinate conventions:
+ *   - x (column/length) index in [0, length)
+ *   - y (row/width)    index in [0, width)
+ *   - depth index in [0, depth)
+ *
+ * Indexing into internal 1D vector uses:
+ *   idx = depth_idx * (width*length) + y * length + x
+ *
+ * Usage notes:
+ *  - Before calling replace(node, headingResolution) ensure node->update_index(width, length, depth, headingResolution)
+ *    has been called (so node->index_length, index_width, index_depth are valid).
+ *  - GRID::replace takes ownership of the passed pointer and will delete any previously stored pointer at that cell.
+ */
+template <typename NodeT>
+class GRID
 {
-	namespace fun
-	{
-	   /**
-	   *  ----------------------
-	   */
-       
-       template <typename T>
-        class GRID
-		{
-            private:
-            static const int nH_Type = 3;  //non holonomic
-            static const int H_Type = 2;  //holonomic
-            public:
-            //std::vector<boost::numeric::ublas::matrix<T>> grid;
-            
-            boost::container::vector<boost::numeric::ublas::matrix<T>> grid;
-            boost::numeric::ublas::matrix<T> matrix_2d;
-            int Length;
-            int Width;
-            int Depth;
-            double BIG_NUMBER;
-            double pi, TWO_PI;
-            GRID()
-            {
-                pi = 3.141592653589793;
-                TWO_PI = 2.0000 * pi;                
-                this->Length = 0;
-                this->Width = 0;
-                this->Depth = 0; 
-                BIG_NUMBER = 1e3;               
-            }
-            double get_Length() {return Length;}
-            double get_Width() {return Width;}
-            double get_Depth() {return Depth;}
-            void resize(int Width, int Length, int Depth=1)
-            {
-                //Eigen::Matrix<T,Width,Length> test;
-                grid.clear();      
-                std ::cout<<"nh clear init"<<std::endl;          
-                matrix_2d.resize(Width,Length);
-                this->Length = Length;
-                this->Width = Width;
-                this->Depth = Depth;//Depth;
-                std ::cout<<"nh befor loop "<<std::endl;
-                std ::cout<<Depth<<std::endl;
-                for (int i=0; i<this->Depth; i++)
-                {
-                    std ::cout<<i<<std::endl;
-                    grid.push_back(matrix_2d);
-                }
-                std ::cout<<"nh after loop "<<std::endl;
-            }
-   
-            
-            void initialize(bool PRINT=false)
-            {
-                if(PRINT)
-                {
-                    std::cout<<"\nLength: "<<Length<<"\tWidth: "<<Width<<"\tDepth: "<<Depth;
-                    std::cout<<"\n"<<grid.size()<<"\t"<<grid[0].size1()<<"\t"<<grid[0].size2();
-                }
-                for (std::size_t d = 0; d< Depth; ++d)
-                {
-                    for(std::size_t  r = 0; r< Width; ++r)
-                    {
-                        for(std::size_t  c=0; c<Length; ++c)
-                        {
-                            grid[d](r,c).isClosed = false; 
-                            grid[d](r,c).isOpen = false; 
-                            grid[d](r,c).set_G(BIG_NUMBER); 
-                        }
-                    }
-                }
- 
-                
-                
-            } 
-            void replace(Node<nH_Type,double>* node, double HeadingResolutionRad)
-            {
-                
-                grid[node->index_depth](node->index_width, node->index_length) = *node;
-            }            
-            void replace(Node<H_Type,int>* node)
-            {
-                grid[0](node->y, node->x) =*node;
-            }
-            bool isClosed(Node<nH_Type,double>* node,double HeadingResolutionRad)
-            {
-                //std::cout<<"\nisCLosed "<<mad::ArrayMatrixTools::mod(node->psi,TWO_PI) <<"\t"<<HeadingResolutionRad<<"\t"<<mad::ArrayMatrixTools::mod(node->psi,TWO_PI) /HeadingResolutionRad<<"\t"<<std::floor( mad::ArrayMatrixTools::mod(node->psi,TWO_PI) /HeadingResolutionRad)<<"\t"<<int(node->y)<<"\t"<<int(node->x)<<"\n";
-               return (grid[node->index_depth](node->index_width, node->index_length).isClosed);
-            }             
-            bool isClosed(Node<H_Type,int>* node)
-            {
-               return (grid[0](node->y, node->x).isClosed);
-            } 
-            bool isOpen(Node<nH_Type,double>* node,double HeadingResolutionRad)
-            {
-               return (grid[node->index_depth](node->index_width, node->index_length).isOpen);
-            }             
-            bool isOpen(Node<H_Type,int>* node)
-            {
-               return (grid[0](node->y, node->x).isOpen);
-            }
-            double get_G(Node<nH_Type,double>* node,double HeadingResolutionRad)
-            {
-               return (grid[node->index_depth](node->index_width, node->index_length).get_G());
-            }             
-            double get_G(Node<H_Type,int>* node)
-            {
-               return (grid[0](node->y, node->x).get_G());
-            } 
-            void set_closed(Node<nH_Type,double>* node,double HeadingResolutionRad)
-            {
-                 // std::cout<<"\nSetCLosed "<<int( mad::ArrayMatrixTools::mod(node->psi,TWO_PI) /HeadingResolutionRad)<<"\t"<<int(node->y)<<"\t"<<int(node->x);
-              grid[node->index_depth](node->index_width, node->index_length) .isClosed = true;
-              grid[node->index_depth](node->index_width, node->index_length) .isOpen = false;
-            }                           
-            void set_visited(Node<H_Type,int>* node)
-            {
-              grid[0](node->y, node->x).isVisited = true;  
-              grid[0](node->y, node->x).isClosed = true;
-              grid[0](node->y, node->x).isOpen = false;
-            }                                            
+public:
+    GRID()
+        : width_(0), length_(0), depth_(1), delete_on_init_(false)
+    {}
 
-        };
-        
-        template <typename T>
-        class ArrayFormGrid
-        {
-             public:
-            T* grid; 
-            int Length;
-            int Width;
-            int Depth;
-            double BIG_NUMBER;
-            ArrayFormGrid()
-            {
-                this->Length = 0;
-                this->Width = 0;
-                this->Depth = 0; 
-                BIG_NUMBER = 1e3;               
-            }
-            double get_Length() {return Length;}
-            double get_Width() {return Width;}
-            double get_Depth() {return Depth;}
-            void resize(int Width, int Length, int Depth=1)
-            {
-                grid = new T[Width*Length*Depth]();
-                this->Length = Length;
-                this->Width = Width;
-                this->Depth = Depth;
-            }
-            void clear()
-            {
-                //delete[] grid;
-            }
-   
-            
-            void initialize(bool PRINT=false)
-            {
-                if(PRINT)
-                {
-                    std::cout<<"\nLength: "<<Length<<"\tWidth: "<<Width<<"\tDepth: "<<Depth;
-                }
-                if(Depth == 1)
-                {
-                    for(int r = 0; r< Width; r++)
-                    {
-                        for(int c=0; c<Length; c++)
-                        {
-                            //std::cout<<"\n"<<r*Length+c;
-                            grid[r*Length+c].isClosed = false; 
-                            grid[r*Length+c].isOpen = false; 
-                            grid[r*Length+c].set_G(BIG_NUMBER); 
-                            
-                        }
-                    }
-                }
-                else
-                {
-                    /*
-                    for(int d=0; d<Depth; d++)
-                    {
-                     for(int r = 0; r< Width; r++)
-                    {
-                        for(int c=0; c<Length; c++)
-                        {
-                            //std::cout<<"\n"<<d*Length*Depth + r*Length+c;
-                            grid[d*Length*Depth + r*Length+c].isClosed = false; 
-                            grid[d*Length*Depth + r*Length+c].isOpen = false; 
-                            grid[d*Length*Depth + r*Length+c].set_G(BIG_NUMBER); 
-                            
-                        }
-                    }                       
-                    }
-                    */
-                    for (std::size_t  c=0; c<Width*Length*Depth; ++c)
-                    {
-                        grid[c].isClosed = false; 
-                        grid[c].isOpen = false; 
-                        grid[c].set_G(BIG_NUMBER);                      
-                    }
-                }
-             
-                
-            } 
-            void replace(Node<2,int>* node)
-            {
-                grid[node->y*Length + node->x] = *node;
-            }
-            bool isClosed(Node<2,int>* node)
-            {
-               return (grid[node->y*Length + node->x].isClosed);
-            }  
-            bool isOpen(Node<2,int>* node)
-            {              
-               return (grid[node->y*Length + node->x].isOpen);
-            }
-            double get_G(Node<2,int>* node)
-            {               
-               return (grid[node->y*Length + node->x].get_G());
-            }               
-            void set_visited(Node<2,int>* node)
-            {               
-              grid[node->y*Length + node->x].isVisited = true;  
-              grid[node->y*Length + node->x].isClosed = true;
-              grid[node->y*Length + node->x].isOpen = false;
-            }                                            
-           
-
-        };
+    ~GRID()
+    {
+        clear_all();
     }
-}
+
+    // Resize the grid; previous contents are deleted.
+    void resize(int width, int length, int depth = 1)
+    {
+        if (width <= 0 || length <= 0 || depth <= 0) {
+            std::cerr << "[GRID] resize called with non-positive dims: "
+                      << "width=" << width << " length=" << length << " depth=" << depth << std::endl;
+            return;
+        }
+        // delete old contents
+        clear_all();
+        width_ = width;
+        length_ = length;
+        depth_ = depth;
+        cells_.assign(static_cast<size_t>(width_) * length_ * depth_, nullptr);
+    }
+
+    // Initialize the grid — optional: delete contents if delete_on_init_ true
+    void initialize()
+    {
+        if (delete_on_init_) {
+            clear_all();
+            cells_.assign(static_cast<size_t>(width_) * length_ * depth_, nullptr);
+        } else {
+            // keep pointers but reset flags if desired (no deletion)
+            for (size_t i = 0; i < cells_.size(); ++i) {
+                if (cells_[i]) {
+                    cells_[i]->isOpen = false;
+                    cells_[i]->isClosed = false;
+                    // do not delete
+                }
+            }
+        }
+    }
+
+    // Set whether initialize() should delete stored pointers
+    void set_delete_on_init(bool v) { delete_on_init_ = v; }
+
+    // Replace stored pointer for the cell corresponding to new_node's indices.
+    // Deletes old pointer if present and not equal to new_node.
+    void replace(NodeT* new_node, double /*headingResolution*/)
+    {
+        if (new_node == nullptr) {
+            return;
+        }
+
+        // We expect caller to have prepared indices via Node::update_index or setPosition.
+        int idx_depth = new_node->index_depth;
+        int idx_width = new_node->index_width;   // row (y)
+        int idx_length = new_node->index_length; // col (x)
+
+        // Bounds safety
+        if (!valid_indices(idx_width, idx_length, idx_depth)) {
+            std::cerr << "[GRID] replace: Node indices out of bounds: "
+                      << "x=" << idx_length << " y=" << idx_width << " depth=" << idx_depth
+                      << " grid(LxW x D)=(" << length_ << "x" << width_ << " x " << depth_ << ")\n";
+            return;
+        }
+
+        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
+        NodeT* old = cells_[linear_idx];
+        if (old != nullptr && old != new_node) {
+            delete old;
+        }
+        cells_[linear_idx] = new_node;
+    }
+
+    // ---- Backwards-compatible overloads (no headingResolution) ----
+    // These forward to the canonical implementation to avoid changing many call sites.
+
+    // replace(old API)
+    void replace(NodeT* new_node)
+    {
+        replace(new_node, 0.0);
+    }
+
+    // get_G with headingResolution (canonical)
+    double get_G(NodeT* node, double /*headingResolution*/) const
+    {
+        if (node == nullptr) return DBL_MAX;
+        int idx_depth = node->index_depth;
+        int idx_width = node->index_width;
+        int idx_length = node->index_length;
+        if (!valid_indices(idx_width, idx_length, idx_depth)) {
+            return DBL_MAX;
+        }
+        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
+        NodeT* stored = cells_[linear_idx];
+        if (stored == nullptr) return DBL_MAX;
+        return stored->get_G();
+    }
+
+    // get_G old API (no headingResolution)
+    double get_G(NodeT* node) const
+    {
+        return get_G(node, 0.0);
+    }
+
+    // Return whether the stored node at the node's index is marked closed (canonical)
+    bool isClosed(NodeT* node, double /*headingResolution*/) const
+    {
+        if (node == nullptr) return false;
+        int idx_depth = node->index_depth;
+        int idx_width = node->index_width;
+        int idx_length = node->index_length;
+        if (!valid_indices(idx_width, idx_length, idx_depth)) {
+            return false;
+        }
+        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
+        NodeT* stored = cells_[linear_idx];
+        if (stored == nullptr) return false;
+        return stored->isClosed;
+    }
+
+    // isClosed old API
+    bool isClosed(NodeT* node) const
+    {
+        return isClosed(node, 0.0);
+    }
+
+    // Return whether the stored node at the node's index is open (canonical)
+    bool isOpen(NodeT* node, double /*headingResolution*/) const
+    {
+        if (node == nullptr) return false;
+        int idx_depth = node->index_depth;
+        int idx_width = node->index_width;
+        int idx_length = node->index_length;
+        if (!valid_indices(idx_width, idx_length, idx_depth)) {
+            return false;
+        }
+        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
+        NodeT* stored = cells_[linear_idx];
+        if (stored == nullptr) return false;
+        return stored->isOpen;
+    }
+
+    // isOpen old API
+    bool isOpen(NodeT* node) const
+    {
+        return isOpen(node, 0.0);
+    }
+
+    // Mark the stored node at the node's index as closed (canonical)
+    void set_closed(NodeT* node, double /*headingResolution*/)
+    {
+        if (node == nullptr) return;
+        int idx_depth = node->index_depth;
+        int idx_width = node->index_width;
+        int idx_length = node->index_length;
+        if (!valid_indices(idx_width, idx_length, idx_depth)) {
+            return;
+        }
+        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
+        NodeT* stored = cells_[linear_idx];
+        if (stored != nullptr) {
+            stored->isClosed = true;
+            stored->isOpen = false;
+        }
+    }
+
+    // set_closed old API
+    void set_closed(NodeT* node)
+    {
+        set_closed(node, 0.0);
+    }
+
+    // ---- new helper expected by some legacy callers ----
+    // Mark the stored node at the node's index as visited (exists in older code)
+    void set_visited(NodeT* node)
+    {
+        if (node == nullptr) return;
+        int idx_depth = node->index_depth;
+        int idx_width = node->index_width;
+        int idx_length = node->index_length;
+        if (!valid_indices(idx_width, idx_length, idx_depth)) {
+            return;
+        }
+        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
+        NodeT* stored = cells_[linear_idx];
+        if (stored != nullptr) {
+            stored->isVisited = true;
+        }
+    }
+
+    // For debugging: dump counts of allocated cells (non-null)
+    size_t non_null_count() const
+    {
+        size_t cnt = 0;
+        for (auto p : cells_) if (p != nullptr) ++cnt;
+        return cnt;
+    }
+
+    // Clear and delete all stored pointers
+    void clear_all()
+    {
+        for (auto &p : cells_) {
+            if (p != nullptr) {
+                delete p;
+                p = nullptr;
+            }
+        }
+        cells_.clear();
+        width_ = length_ = depth_ = 0;
+    }
+
+    int width() const { return width_; }
+    int length() const { return length_; }
+    int depth() const { return depth_; }
+
+private:
+    bool valid_indices(int row, int col, int dep) const
+    {
+        if (col < 0 || col >= length_) return false;
+        if (row < 0 || row >= width_) return false;
+        if (dep < 0 || dep >= depth_) return false;
+        return true;
+    }
+
+    // linear index layout: depth major, then row, then column
+    size_t to_linear_index(int row, int col, int dep) const
+    {
+        // dep * (width * length) + row * length + col
+        return static_cast<size_t>(dep) * (static_cast<size_t>(width_) * static_cast<size_t>(length_))
+             + static_cast<size_t>(row) * static_cast<size_t>(length_)
+             + static_cast<size_t>(col);
+    }
+
+    int width_;
+    int length_;
+    int depth_;
+    bool delete_on_init_;
+
+    std::vector<NodeT*> cells_;
+};
+
+} // namespace fun
+} // namespace adore
