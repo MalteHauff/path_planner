@@ -20,3 +20,8 @@ libeigen3-dev
 libboost-all-dev
 #libxerces-c-dev
 #xsdcxx
+
+
+# following two lines added due to error during colcon build
+libblas-dev
+liblapack-dev
