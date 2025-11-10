@@ -9,266 +9,141 @@ namespace adore {
 namespace fun {
 
 /**
- * Simple GRID container that stores pointers to Node objects in a 3D (width x length x depth)
- * layout, with ownership: the grid owns stored pointers and will delete them when replaced.
+ * 3D grid (Width x Length x Depth) storing pointers to NodeT.
+ * - **Non-owning by default**: won’t delete NodeT* (safe with node pools).
+ * - Depth-major linearization: dep*(Width*Length) + row*Length + col
  *
- * Coordinate conventions:
- *   - x (column/length) index in [0, length)
- *   - y (row/width)    index in [0, width)
- *   - depth index in [0, depth)
- *
- * Indexing into internal 1D vector uses:
- *   idx = depth_idx * (width*length) + y * length + x
- *
- * Usage notes:
- *  - Before calling replace(node, headingResolution) ensure node->update_index(width, length, depth, headingResolution)
- *    has been called (so node->index_length, index_width, index_depth are valid).
- *  - GRID::replace takes ownership of the passed pointer and will delete any previously stored pointer at that cell.
+ * NodeT must expose:
+ *   int index_width, index_length, index_depth;
+ *   bool isOpen, isClosed;  double get_G();
  */
-template <typename NodeT>
+template<typename NodeT>
 class GRID
 {
 public:
     GRID()
-        : width_(0), length_(0), depth_(1), delete_on_init_(false)
+        : width_(0), length_(0), depth_(1),
+          delete_on_init_(false),
+          owns_pointers_(false)
     {}
 
-    ~GRID()
-    {
-        clear_all();
-    }
-
-    // Resize the grid; previous contents are deleted.
     void resize(int width, int length, int depth = 1)
     {
         if (width <= 0 || length <= 0 || depth <= 0) {
-            std::cerr << "[GRID] resize called with non-positive dims: "
-                      << "width=" << width << " length=" << length << " depth=" << depth << std::endl;
+            std::cerr << "[GRID] invalid resize: width=" << width
+                      << " length=" << length << " depth=" << depth << "\n";
             return;
         }
-        // delete old contents
         clear_all();
-        width_ = width;
+        width_  = width;
         length_ = length;
-        depth_ = depth;
+        depth_  = depth;
         cells_.assign(static_cast<size_t>(width_) * length_ * depth_, nullptr);
     }
 
-    // Initialize the grid — optional: delete contents if delete_on_init_ true
+    // Always null pointers between plans to avoid dangling pool pointers.
     void initialize()
     {
-        if (delete_on_init_) {
-            clear_all();
-            cells_.assign(static_cast<size_t>(width_) * length_ * depth_, nullptr);
-        } else {
-            // keep pointers but reset flags if desired (no deletion)
-            for (size_t i = 0; i < cells_.size(); ++i) {
-                if (cells_[i]) {
-                    cells_[i]->isOpen = false;
-                    cells_[i]->isClosed = false;
-                    // do not delete
-                }
-            }
-        }
+        for (auto &p : cells_) p = nullptr;
     }
 
-    // Set whether initialize() should delete stored pointers
-    void set_delete_on_init(bool v) { delete_on_init_ = v; }
+    void set_delete_on_init(bool v) { delete_on_init_ = v; } // kept for compat (noop)
+    void set_owns_pointers(bool v)  { owns_pointers_  = v; }
+    bool owns_pointers() const      { return owns_pointers_; }
 
-    // Replace stored pointer for the cell corresponding to new_node's indices.
-    // Deletes old pointer if present and not equal to new_node.
-    void replace(NodeT* new_node, double /*headingResolution*/)
+    // Store/replace pointer at its own indices
+    void replace(NodeT* new_node, double /*headingResolution*/ = 0.0)
     {
-        if (new_node == nullptr) {
-            return;
-        }
-
-        // We expect caller to have prepared indices via Node::update_index or setPosition.
-        int idx_depth = new_node->index_depth;
-        int idx_width = new_node->index_width;   // row (y)
-        int idx_length = new_node->index_length; // col (x)
-
-        // Bounds safety
-        if (!valid_indices(idx_width, idx_length, idx_depth)) {
-            std::cerr << "[GRID] replace: Node indices out of bounds: "
-                      << "x=" << idx_length << " y=" << idx_width << " depth=" << idx_depth
-                      << " grid(LxW x D)=(" << length_ << "x" << width_ << " x " << depth_ << ")\n";
-            return;
-        }
-
-        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
-        NodeT* old = cells_[linear_idx];
-        if (old != nullptr && old != new_node) {
-            delete old;
-        }
-        cells_[linear_idx] = new_node;
+        if (!new_node) return;
+        const int r = new_node->index_width;
+        const int c = new_node->index_length;
+        const int d = new_node->index_depth;
+        if (!valid_indices(r,c,d)) return;
+        size_t idx = to_linear_index(r,c,d);
+        NodeT* old = cells_[idx];
+        if (owns_pointers_ && old && old != new_node) delete old;
+        cells_[idx] = new_node;
     }
 
-    // ---- Backwards-compatible overloads (no headingResolution) ----
-    // These forward to the canonical implementation to avoid changing many call sites.
-
-    // replace(old API)
-    void replace(NodeT* new_node)
+    NodeT* get(int row, int col, int dep) const
     {
-        replace(new_node, 0.0);
+        if (!valid_indices(row,col,dep)) return nullptr;
+        return cells_[to_linear_index(row,col,dep)];
     }
 
-    // get_G with headingResolution (canonical)
-    double get_G(NodeT* node, double /*headingResolution*/) const
+    // ---- helpers used by A* / Hybrid A* ----
+    double get_G(NodeT* node, double /*headingResolution*/ = 0.0) const
     {
-        if (node == nullptr) return DBL_MAX;
-        int idx_depth = node->index_depth;
-        int idx_width = node->index_width;
-        int idx_length = node->index_length;
-        if (!valid_indices(idx_width, idx_length, idx_depth)) {
-            return DBL_MAX;
-        }
-        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
-        NodeT* stored = cells_[linear_idx];
-        if (stored == nullptr) return DBL_MAX;
-        return stored->get_G();
+        if (!node) return DBL_MAX;
+        NodeT* s = get(node->index_width, node->index_length, node->index_depth);
+        return s ? s->get_G() : DBL_MAX;
     }
 
-    // get_G old API (no headingResolution)
-    double get_G(NodeT* node) const
+    bool isClosed(NodeT* node, double /*headingResolution*/ = 0.0) const
     {
-        return get_G(node, 0.0);
+        if (!node) return false;
+        NodeT* s = get(node->index_width, node->index_length, node->index_depth);
+        return s ? s->isClosed : false;
     }
 
-    // Return whether the stored node at the node's index is marked closed (canonical)
-    bool isClosed(NodeT* node, double /*headingResolution*/) const
+    bool isOpen(NodeT* node, double /*headingResolution*/ = 0.0) const
     {
-        if (node == nullptr) return false;
-        int idx_depth = node->index_depth;
-        int idx_width = node->index_width;
-        int idx_length = node->index_length;
-        if (!valid_indices(idx_width, idx_length, idx_depth)) {
-            return false;
-        }
-        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
-        NodeT* stored = cells_[linear_idx];
-        if (stored == nullptr) return false;
-        return stored->isClosed;
+        if (!node) return false;
+        NodeT* s = get(node->index_width, node->index_length, node->index_depth);
+        return s ? s->isOpen : false;
     }
 
-    // isClosed old API
-    bool isClosed(NodeT* node) const
-    {
-        return isClosed(node, 0.0);
-    }
-
-    // Return whether the stored node at the node's index is open (canonical)
-    bool isOpen(NodeT* node, double /*headingResolution*/) const
-    {
-        if (node == nullptr) return false;
-        int idx_depth = node->index_depth;
-        int idx_width = node->index_width;
-        int idx_length = node->index_length;
-        if (!valid_indices(idx_width, idx_length, idx_depth)) {
-            return false;
-        }
-        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
-        NodeT* stored = cells_[linear_idx];
-        if (stored == nullptr) return false;
-        return stored->isOpen;
-    }
-
-    // isOpen old API
-    bool isOpen(NodeT* node) const
-    {
-        return isOpen(node, 0.0);
-    }
-
-    // Mark the stored node at the node's index as closed (canonical)
-    void set_closed(NodeT* node, double /*headingResolution*/)
-    {
-        if (node == nullptr) return;
-        int idx_depth = node->index_depth;
-        int idx_width = node->index_width;
-        int idx_length = node->index_length;
-        if (!valid_indices(idx_width, idx_length, idx_depth)) {
-            return;
-        }
-        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
-        NodeT* stored = cells_[linear_idx];
-        if (stored != nullptr) {
-            stored->isClosed = true;
-            stored->isOpen = false;
-        }
-    }
-
-    // set_closed old API
-    void set_closed(NodeT* node)
-    {
-        set_closed(node, 0.0);
-    }
-
-    // ---- new helper expected by some legacy callers ----
-    // Mark the stored node at the node's index as visited (exists in older code)
+    // Some code calls this to ensure the node is stored in the grid
     void set_visited(NodeT* node)
     {
-        if (node == nullptr) return;
-        int idx_depth = node->index_depth;
-        int idx_width = node->index_width;
-        int idx_length = node->index_length;
-        if (!valid_indices(idx_width, idx_length, idx_depth)) {
-            return;
-        }
-        size_t linear_idx = to_linear_index(idx_width, idx_length, idx_depth);
-        NodeT* stored = cells_[linear_idx];
-        if (stored != nullptr) {
-            stored->isVisited = true;
-        }
+        if (!node) return;
+        replace(node);
+        node->isOpen = node->isOpen; // no-op, kept to mirror legacy semantics
     }
 
-    // For debugging: dump counts of allocated cells (non-null)
-    size_t non_null_count() const
+    void set_closed(NodeT* node, double /*headingResolution*/ = 0.0)
     {
-        size_t cnt = 0;
-        for (auto p : cells_) if (p != nullptr) ++cnt;
-        return cnt;
+        if (!node) return;
+        NodeT* s = get(node->index_width, node->index_length, node->index_depth);
+        if (s) s->isClosed = true;
+        else {
+            // if the slot is empty, store the node and mark closed
+            replace(node);
+            node->isClosed = true;
+        }
     }
 
-    // Clear and delete all stored pointers
     void clear_all()
     {
-        for (auto &p : cells_) {
-            if (p != nullptr) {
-                delete p;
-                p = nullptr;
-            }
+        if (owns_pointers_) {
+            for (auto &p : cells_) { if (p) delete p; p = nullptr; }
         }
         cells_.clear();
         width_ = length_ = depth_ = 0;
     }
 
-    int width() const { return width_; }
+    int width()  const { return width_; }
     int length() const { return length_; }
-    int depth() const { return depth_; }
+    int depth()  const { return depth_; }
 
 private:
     bool valid_indices(int row, int col, int dep) const
     {
-        if (col < 0 || col >= length_) return false;
-        if (row < 0 || row >= width_) return false;
-        if (dep < 0 || dep >= depth_) return false;
-        return true;
+        return !(col < 0 || col >= length_ ||
+                 row < 0 || row >= width_  ||
+                 dep < 0 || dep >= depth_);
     }
 
-    // linear index layout: depth major, then row, then column
     size_t to_linear_index(int row, int col, int dep) const
     {
-        // dep * (width * length) + row * length + col
-        return static_cast<size_t>(dep) * (static_cast<size_t>(width_) * static_cast<size_t>(length_))
+        return static_cast<size_t>(dep) * static_cast<size_t>(width_) * static_cast<size_t>(length_)
              + static_cast<size_t>(row) * static_cast<size_t>(length_)
              + static_cast<size_t>(col);
     }
 
-    int width_;
-    int length_;
-    int depth_;
+    int  width_, length_, depth_;
     bool delete_on_init_;
-
+    bool owns_pointers_;
     std::vector<NodeT*> cells_;
 };
 

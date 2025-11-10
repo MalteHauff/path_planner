@@ -1,0 +1,59 @@
+graph_search_node:
+  ros__parameters:
+    # Time / TF
+    use_sim_time: true
+    world_frame: map
+    base_frame: base_link
+    tf_lookup_timeout_s: 1.0
+    tf_poll_hz: 30.0
+
+    # Core planning
+    heading_resolution_deg: 45.0
+    vehicle_width_m: 0.35
+    vehicle_length_m: 0.35
+    inflate_cells: 1
+
+    # Replanning hysteresis (reduces route flip-flop)
+    min_replan_translation: 0.25
+    min_replan_rotation_deg: 20.0
+
+    # Search limits & safety
+    max_iterations: 500000
+    planning_clearance_m: 0.05         # extra margin for PLANNING only (final check stays strict)
+    occ_threshold: 50                  # map cell >= threshold -> occupied
+
+    # Final publish policy
+    final_allow_unknown: false          # if false: unknown treated as occupied on final check
+    publish_truncated_path: true      # set true to allow publishing safe prefix
+    min_publish_length_m: 0.02
+    min_publish_points: 2
+    min_publish_ratio: 0.0
+
+    # Anti-flap (path stickiness)
+    keep_old_if_valid_prefix: true
+    lock_prefix_m: 1.5
+    max_prefix_deviation_m: 0.35       # raise (e.g., 0.8) to switch more easily
+    require_improvement_m: 0.25        # lower (e.g., 0.05) for short goals
+
+    # Goal hysteresis
+    goal_pos_tol_m: 0.25
+    goal_yaw_tol_deg: 20.0
+    stop_replanning_within_goal_radius_m: 0.5
+    post_goal_freeze_s: 3.0
+    publish_when_goal_reached: false
+
+    # Path warmup/keepalive (prevents first-plan race)
+    warmup_republish_s: 0.8            # burst after accepting a new path
+    keepalive_rate_hz: 2.0             # steady re-publish while active
+    enable_keepalive: true
+
+    # Anchoring
+    anchor_start_to_robot:  true
+    anchor_start_gap_m:     0.30
+    anchor_goal_to_target:  false
+    anchor_goal_gap_m:      0.35
+
+    # NEW: final check softness
+    final_shrink_cells: 1.0        # shrink final footprint by ~1 cell in each dimension
+    final_strip_prefix_m: 0.45  
+

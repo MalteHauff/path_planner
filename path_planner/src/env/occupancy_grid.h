@@ -1,346 +1,200 @@
 /********************************************************************************
- * Copyright (C) 2017-2020 German Aerospace Center (DLR). 
- * Eclipse ADORe, Automated Driving Open Research https://eclipse.org/adore
- *
- * This program and the accompanying materials are made available under the 
- * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * SPDX-License-Identifier: EPL-2.0 
- *
- * Contributors: 
- *   Reza Dariani - initial API and implementation
+ * occupancy_grid.h -- Relaxed OccupanyGrid with UNKNOWN-as-free default
+ *  - Grid values: -1 (unknown), 0 (free), 1 (occupied)
+ *  - World<->grid conversion using origin and yaw
+ *  - Provides obstacle API used by trajectory_smoothing:
+ *      - nested struct _Obstacle with circle decomposition
+ *      - get_obstacles()
+ *      - get_ellipse_r(beta, a, b)
+ *      - static transformation(x,y,theta, dx, dy)
+ *  - Adds OG.init(msg, H, W) to match graph_search_node.cpp
  ********************************************************************************/
-
 #pragma once
-//#include <plotlablib/afigurestub.h>
-//#include <plotlablib/figurestubfactory.h>
-//#include <adore/apps/if_plotlab/plot_shape.h>
-#include <boost/geometry.hpp>
-#include <boost/container/vector.hpp>
+
 #include <eigen3/Eigen/Dense>
+#include <vector>
+#include <cmath>
+#include <cstdint>
+#include <iostream>
+#include <algorithm>
+#include <boost/container/vector.hpp>
 
 #include <nav_msgs/msg/occupancy_grid.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
 
-#include <stdint.h>
+namespace adore {
+namespace env {
 
-//#include <adore/fun
-namespace adore
+class OccupanyGrid
 {
-	namespace env
-	{
-        namespace bg = boost::geometry; 
-        namespace bgm = bg::model;
-        using point_xy = bgm::d2::point_xy<double>; 
-        using polygon = bgm::polygon<point_xy>;
-       	class OccupanyGrid
-		{
-            public:
-                typedef bg::model::point<double,2,bg::cs::cartesian> Point;
-                typedef bg::model::box<Point> box;
-                polygon rectangularBox;
-                struct circle
-                {
-                    double x, y, r;
-                };            
-                struct _Obstacle
-                {
-                    double x;
-                    double y;
-                    double width;
-                    double length;
-                    double alpha;
-                    std::vector<double> vertices_x,vertices_y;
-                    std::vector<circle> circles;
-                    polygon poly;
-                    int ID;
-                };
-                Eigen::MatrixXd Grid; 
-                typedef boost::container::vector<_Obstacle> obstacleList;
-                obstacleList obstacles;
-                double pi;
-                uint32_t width;
-                uint32_t height;
-                // Option A (keeps using msg->data inside function)
-                // add these members to class (near width/height)
-                double resolution = 0.0;
-                double origin_x = 0.0;
-                double origin_y = 0.0;
+public:
+    // --- Nested types for smoothing / obstacles ---
+    struct _Circle {
+        double x{0.0};
+        double y{0.0};
+        double r{0.0};
+    };
 
-                // Replace your init method with this corrected version:
-                void init(const nav_msgs::msg::OccupancyGrid::ConstSharedPtr &msg, uint32_t h, uint32_t w)
-                {
-                    std::cout << "start og init" << std::endl;
-                    height = h;
-                    width = w;
-                    pi = 3.141592653589793;
+    struct _Obstacle {
+        double x{0.0};
+        double y{0.0};
+        double length{0.0};   // major axis (m)
+        double width{0.0};    // minor axis (m)
+        double alpha{0.0};    // orientation (rad)
+        boost::container::vector<_Circle> circles; // circle decomposition (optional)
+    };
 
-                    // store meta info for coordinate conversions
-                    resolution = msg->info.resolution;
-                    origin_x = msg->info.origin.position.x;
-                    origin_y = msg->info.origin.position.y;
+    using obstacleList = boost::container::vector<_Obstacle>;
 
-                    std::cout << "height " << height << " width " << width
-                            << " res " << resolution
-                            << " origin(" << origin_x << "," << origin_y << ")" << std::endl;
+public:
+    // Grid values: -1 unknown, 0 free, 1 occupied
+    Eigen::MatrixXi Grid;
 
-                    Grid = Eigen::MatrixXd::Zero(height, width);
+    // Map metadata
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    double        resolution{0.05};   // meters / cell
+    double        origin_x{0.0};      // meters
+    double        origin_y{0.0};      // meters
+    double        origin_yaw{0.0};    // radians
 
-                    // msg->data is row-major with index = x + y*width, where x in [0,width-1], y in [0,height-1]
-                    for (uint32_t y = 0; y < height; ++y)
-                    {
-                        for (uint32_t x = 0; x < width; ++x)
-                        {
-                            int idx = static_cast<int>(x + y * width);
-                            int8_t v = msg->data[idx];
+    // Obstacles (for smoothing helpers)
+    obstacleList obstacles_;
 
-                            // normalize to: 0 = FREE, 1 = OCCUPIED, -1 = UNKNOWN
-                            if (v == 0)
-                            {
-                                Grid(y, x) = 0; // FREE
-                            }
-                            else if (v == -1)
-                            {
-                                Grid(y, x) = -1; // UNKNOWN
-                            }
-                            else
-                            {
-                                Grid(y, x) = 1; // OCCUPIED (usually v==100)
-                            }
-                        }
-                    }
-                }
+    // Unknown policy (default relaxed → unknown treated as free)
+    void set_unknown_as_occupied(bool v) { unknown_is_occupied_ = v; }
+    bool unknown_as_occupied() const { return unknown_is_occupied_; }
 
-                
-                boost::container::vector<_Obstacle> get_obstacles()
-                {
-                    return obstacles;
-                }
-                void resize(int Width, int Length)
-                {
-                    //figure->clear();  
-                    //Grid = Eigen::MatrixXd::Zero(Width,Length);
-                    /*
-                    _Obstacle obst_0;
-                    obst_0.ID = 0;
-                    obst_0.x = 16.;
-                    obst_0.y = 10.;
-                    obst_0.length = 10.;
-                    obst_0.width = 3.;
-                    obst_0.alpha = 0.17;
-                    obst_0.poly = rotation(&obst_0,figure); 
-                    obstacles.push_back(obst_0);
-                    _Obstacle obst_1;
-                    obst_1.ID = 1;
-                    obst_1.x = 25.;
-                    obst_1.y = 2.;
-                    obst_1.length = 3.;
-                    obst_1.width = 2.;
-                    obst_1.alpha = 0.37;
-                    obst_1.poly = rotation(&obst_1,figure); 
-                    obstacles.push_back(obst_1);     */           
-                    obstacle();
-                //if(figure != nullptr)
-                //{
-                  //  PLOT(figure);
-                //}
+    OccupanyGrid() = default;
 
+    // Accessors used by trajectory_smoothing
+    obstacleList&       get_obstacles()       { return obstacles_; }
+    const obstacleList& get_obstacles() const { return obstacles_; }
 
-                                
-                }
-                void calculateCircles(_Obstacle* obst)
-                {
-                    obst->circles.clear();
-                    double r = std::min(obst->length, obst->width) ;
-                    double l = std::max(obst->length, obst->width);
-                    double x,y, tmp_x, tmp_y;
-                    std::stringstream tag;
-                    circle tmp_circle;
-                    for(double  i=0.0; i<l - r/4.0; i=i+r*0.5)
-                    {
-                        tmp_x = -l/2.0 + i + r/4.0;
-                        tmp_y = 0.0;;
-                        transformation(x,y,obst->alpha, tmp_x , tmp_y);
-                        x += obst->x ;
-                        y += obst->y ;
-                        tag << "circle"<<obst->ID<<"-"<<i;
-                        tmp_circle.x = x;
-                        tmp_circle.y = y;
-                        tmp_circle.r = r/2.;
-                        obst->circles.push_back(tmp_circle);
-                        //PLOT::plotCircle(tag.str(),x,y,0.10, r/2., figure,"LineColor=0.8,0.8,0.8;LineWidth=0;FillColor=1,0,0");
-
-                    }
-                    std::cout<<"\nNum of circles: "<<obst->circles.size();
-
-
-                }
-                void plotSoftRectangle(_Obstacle* obst,std::string tag)
-                {
-                    std::vector<double> x_v, y_v;
-                    double x,y,xt,yt ;
-                    for (double beta = 0.0; beta < 2*pi ; beta = beta + 0.1745)
-                    {
-                        polar2Cartesian(x, y, get_softRectangle_r (beta, obst->length, obst->width), beta);
-                        transformation(xt, yt,obst->alpha, x, y);
-                        x_v.push_back(obst->x + xt);
-                        y_v.push_back(obst->y + yt);
-                        //std::cout<<"\n"<<x<<"\t"<<y;
-                    }
-                    //figure->plot(tag,&x_v[0],&y_v[0],2.5,x_v.size(), GREEN);
-                }
-                void plotEllipse(_Obstacle* obst,std::string tag)
-                {
-                    std::vector<double> x_v, y_v;
-                    double x,y,xt,yt ;
-                    for (double beta = 0.0; beta < 2*pi ; beta = beta + 0.1745)
-                    {
-                        polar2Cartesian(x, y, get_ellipse_r (beta, obst->length, obst->width), beta);
-                        transformation(xt, yt,obst->alpha, x, y);
-                        x_v.push_back(obst->x + xt);
-                        y_v.push_back(obst->y + yt);
-                        //std::cout<<"\n"<<x<<"\t"<<y;
-                    }
-                    //figure->plot(tag,&x_v[0],&y_v[0],2.5,x_v.size(), GREEN);
-                }            
-                void plotPolygon(_Obstacle* obst,std::string tag)
-                {
-                //std::cout<<"\n****** "<<obst->vertices_x.size();
-                    //figure->plot(tag,&obst->vertices_x[0],&obst->vertices_y[0],2.5,obst->vertices_x.size(), GREEN);
-
-                }
-                double get_ellipse_r(double beta, double length, double width)
-                {
-                    length = length/1.4142;
-                    width = width/1.4142;
-                    return (length*width)/( (sqrt(  ((width*cos(beta))*(width*cos(beta))) + ((length*sin(beta))*(length*sin(beta)))  )    )  );                
-                }
-                double get_softRectangle_r (double beta, double length, double width)
-                { 
-                    
-                    double softness = 0.01;
-                    double cos_2 = cos(beta)*cos(beta);
-                    double cos_4 = cos_2 * cos_2;
-                    double soft_rectangle=( 2*cos_4 -  (2* cos_2 )+1 );
-                    double soft_rectangle_rr= 1/(pow(soft_rectangle,softness));
-                    return sqrt((length/1.4142)*soft_rectangle_rr*cos((beta))*(length/1.4142)*soft_rectangle_rr*cos((beta))  +((width/1.4142)*soft_rectangle_rr*sin((beta)))*((width/2.)*soft_rectangle_rr*sin((beta))));                
-                }
-                static void transformation(double &x, double &y,double theta, double x_o, double y_o)
-                {
-                    x = x_o  *cos(theta) - y_o  * sin(theta) ;
-                    y = x_o  *sin(theta) + y_o  * cos(theta) ;
-                } 
-                // Add helper to convert world coords (meters) -> grid indices (row, col)
-                bool worldToGrid(double world_x, double world_y, int &row, int &col) const
-                {
-                    // compute grid indices using stored origin and resolution
-                    // col = x_index, row = y_index
-                    if (resolution <= 0.0) return false;
-                    col = static_cast<int>(std::floor((world_x - origin_x) / resolution));
-                    row = static_cast<int>(std::floor((world_y - origin_y) / resolution));
-                    return point_inside(row, col);
-                }
-
-                bool check_valid_position(int row, int col) const
-                {
-                    if (!point_inside(row, col)) {
-                        return false;
-                    }
-                    // FREE cells are 0
-                    return Grid(row, col) == 0;
-                }
-
-                bool point_inside(int row, int col) const
-                {
-                    // row in [0, height-1], col in [0, width-1]
-                    return row >= 0 && row < static_cast<int>(height) && col >= 0 && col < static_cast<int>(width);
-                }
-  
-            private:
-                std::string GREEN= "LineColor=0.,1.,0.;LineWidth=5";
-                std::string RED= "LineColor=1.,0.,0.;LineWidth=5";
-                void polar2Cartesian(double &x, double &y, double r, double beta)
-                {
-                    x = r* cos(beta);
-                    y = r* sin(beta);
-                }
-
-                void obstacle ()
-                {
-                    for (int r=0; r<Grid.rows(); ++r)
-                    {                    
-                        for(int c=0; c<Grid.cols(); ++c)
-                        {
-                            for(int i=0; i<obstacles.size(); ++i)
-                            {
-                                if(bg::within(Point(c,r),obstacles[i].poly))
-                            //if((r<15 && r>6 && c<18 && c> 14) || (r<12 && r>-1 && c<38 && c> 33) || (r<12 && r>8 && c<63 && c> 59) || (r<9 && r>5 && c<51 && c> 47))
-                                {
-                                    Grid(r,c) = 1;
-                                }
-                            }
-
-                        }
-                    }
-                }
-
-                void PLOT()
-                {
-                    
-                    /*            
-                    std::stringstream ss;
-                    for (int r=0; r<Grid.rows(); ++r)
-                    {                    
-                        for(int c=0; c<Grid.cols(); ++c)
-                        {
-                            ss.clear();
-                            ss.str("");
-                            ss << "f"<<r*Grid.cols()+c;
-                            if(Grid(r,c)==1) {
-                                PLOT::plotPosition(ss.str(),c,r,figure,RED,0.1);
-                            }
-                            //std::cout<<"\n"<<r<<"\t"<<c<<"\t"<<r*Grid.cols()+c;
-                            else if (Grid(r,c)==0) {
-                                PLOT::plotPosition(ss.str(),c,r,figure,GREEN,0.1);
-                            }
-                        }
-
-                    }*/
-                    
-                }
-
-                polygon rotation(_Obstacle* obst)
-            {
-                obst->vertices_x.clear();
-                obst->vertices_y.clear();
-                double l= obst->length;
-                double w= obst->width;
-                double angle = obst->alpha;
-                box rectangle(Point(-l/2.0,-w/2.0),Point(l/2.0,w/2.0));
-                bg::assign(rectangularBox,rectangle);                
-                polygon rbb;
-                double x = obst->x;
-                double y = obst->y;
-                std::vector<Point> tmp_p;
-                for(const auto&p: rectangularBox.outer())
-                {
-                    tmp_p.push_back(Point(p.x()*cos(angle)-p.y()*sin(angle)+x,p.x()*sin(angle)+p.y()*cos(angle)+y));
-                    obst->vertices_x.push_back(p.x()*cos(angle)-p.y()*sin(angle)+x);   
-                    obst->vertices_y.push_back(p.x()*sin(angle)+p.y()*cos(angle)+y);                    
-                }
-                bg::assign_points(rbb,tmp_p);
-                bg::correct(rbb);
-                //std::cout<<"\n"<<bg::dsv(rbb);
-                //figure->plot("#obst54654",&obst->vertices_x[0],&obst->vertices_y[0],2.5,obst->vertices_x.size(), GREEN);
-                
-                //std::cout<<"\n"<<bg::dsv(configurationSpaceBoxes(i,j));
-                return rbb;
-
-            } 
-            
-                
-
-
-        };
+    // Ellipse radius at angle beta (in obstacle local frame), with semi-axes a=length/2, b=width/2
+    static double get_ellipse_r(double beta, double a, double b)
+    {
+        const double aa = std::max(1e-9, a);
+        const double bb = std::max(1e-9, b);
+        const double c = std::cos(beta);
+        const double s = std::sin(beta);
+        const double denom = std::sqrt((bb*bb*c*c) + (aa*aa*s*s));
+        return (aa*bb) / denom;
     }
-}
+
+    // Rigid-body transform of a local offset (dx,dy) by pose (x,y,theta)
+    static Eigen::Vector2d transformation(double x, double y, double theta, double dx, double dy)
+    {
+        const double cx =  std::cos(theta) * dx - std::sin(theta) * dy;
+        const double cy =  std::sin(theta) * dx + std::cos(theta) * dy;
+        return Eigen::Vector2d(x + cx, y + cy);
+    }
+
+    // Initialize from a ROS OccupancyGrid message (matches GraphSearchNode::receive_map_data usage)
+    void init(const nav_msgs::msg::OccupancyGrid::SharedPtr& msg,
+              std::uint32_t /*H*/, std::uint32_t /*W*/,
+              int occ_threshold = 50)
+    {
+        width      = msg->info.width;
+        height     = msg->info.height;
+        resolution = msg->info.resolution;
+        origin_x   = msg->info.origin.position.x;
+        origin_y   = msg->info.origin.position.y;
+
+        // yaw from quaternion
+        {
+            const auto &q = msg->info.origin.orientation;
+            tf2::Quaternion tq(q.x, q.y, q.z, q.w);
+            double roll, pitch, yaw;
+            tf2::Matrix3x3(tq).getRPY(roll, pitch, yaw);
+            origin_yaw = yaw;
+        }
+
+        Grid = Eigen::MatrixXi::Zero(static_cast<int>(height), static_cast<int>(width));
+        for (std::uint32_t y = 0; y < height; ++y) {
+            for (std::uint32_t x = 0; x < width; ++x) {
+                const std::size_t idx = static_cast<std::size_t>(x + y * width);
+                const int v = static_cast<int>(msg->data[idx]);
+                if (v < 0)                 Grid(static_cast<int>(y), static_cast<int>(x)) = -1; // unknown
+                else if (v >= occ_threshold) Grid(static_cast<int>(y), static_cast<int>(x)) =  1; // occupied
+                else                        Grid(static_cast<int>(y), static_cast<int>(x)) =  0; // free
+            }
+        }
+    }
+
+    // Inflate obstacles by N cells (square dilation). Unknowns are NOT inflated.
+    void inflate(int radius_cells)
+    {
+        if (radius_cells <= 0 || width == 0 || height == 0) return;
+
+        Eigen::MatrixXi out = Grid;
+        for (int r = 0; r < static_cast<int>(height); ++r) {
+            for (int c = 0; c < static_cast<int>(width); ++c) {
+                if (Grid(r, c) != 1) continue; // only inflate occupied
+
+                const int r0 = std::max(0, r - radius_cells);
+                const int r1 = std::min(static_cast<int>(height) - 1, r + radius_cells);
+                const int c0 = std::max(0, c - radius_cells);
+                const int c1 = std::min(static_cast<int>(width)  - 1, c + radius_cells);
+
+                for (int rr = r0; rr <= r1; ++rr)
+                    for (int cc = c0; cc <= c1; ++cc)
+                        out(rr, cc) = 1;
+            }
+        }
+        Grid.swap(out);
+    }
+
+    // Convert world [m] -> grid [row, col] (integers). Returns true if inside.
+    inline bool world_to_grid(double wx, double wy, int& row, int& col) const
+    {
+        // transform world -> map frame (rotate by -origin_yaw, then translate)
+        const double cx = wx - origin_x;
+        const double cy = wy - origin_y;
+        const double ca = std::cos(-origin_yaw);
+        const double sa = std::sin(-origin_yaw);
+        const double mx =  ca * cx - sa * cy;
+        const double my =  sa * cx + ca * cy;
+
+        col = static_cast<int>(std::floor(mx / resolution));
+        row = static_cast<int>(std::floor(my / resolution));
+        return point_inside(row, col);
+    }
+
+    // Convert grid [row, col] -> world [m]
+    inline void grid_to_world(int row, int col, double& wx, double& wy) const
+    {
+        const double mx = (static_cast<double>(col) + 0.5) * resolution;
+        const double my = (static_cast<double>(row) + 0.5) * resolution;
+        const double ca = std::cos(origin_yaw);
+        const double sa = std::sin(origin_yaw);
+        const double cx =  ca * mx - sa * my;
+        const double cy =  sa * mx + ca * my;
+        wx = cx + origin_x;
+        wy = cy + origin_y;
+    }
+
+    // Bounds check
+    inline bool point_inside(int row, int col) const
+    {
+        return (row >= 0 && row < static_cast<int>(height)
+             && col >= 0 && col < static_cast<int>(width));
+    }
+
+    // Valid cell: inside & not occupied & (unknown free per policy)
+    inline bool check_valid_position(int row, int col) const
+    {
+        if (!point_inside(row, col)) return false;
+        const int v = Grid(row, col);
+        if (v == 1)  return false;                  // occupied
+        if (v == -1) return !unknown_is_occupied_;  // unknown -> free if policy false
+        return true;                                // free
+    }
+
+private:
+    bool unknown_is_occupied_{false}; // RELAXED DEFAULT (planning allows unknown)
+};
+
+} // namespace env
+} // namespace adore

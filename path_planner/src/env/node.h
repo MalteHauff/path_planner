@@ -1,447 +1,344 @@
 /********************************************************************************
- * node.h  -- cleaned and API-compatible version
+ * node.h  -- Non-holonomic node with multi-action primitives and runtime
+ *            collision policy toggles (rectangle vs center-only).
  *
- * Keep this file at: src/env/node.h
- *
- * Notes:
- *  - Provides Node<2,int> and Node<3,double> behaviour used across the codebase.
- *  - Adds a pool-friendly overload:
- *        void updateSuccessors3D(OccupanyGrid*, CollisionCheckOffline*, double, std::vector<Node<3,double>*>&)
- *    which fills the provided pointers in-place and marks invalid candidates with x=y=-1.0.
+ *  - Successors: straight, ±dA arcs, optional ±0.5*dA (gentle) and ±1.5*dA (sharper)
+ *  - Optional reverse straight (off by default)
+ *  - Runtime toggle: center-only collision (fallback stage in planner)
+ *  - API kept compatible with GraphSearchNode & Hybrid_A_Star
  ********************************************************************************/
-
 #pragma once
 
-#include "../algo/collision_check_offline.h"
-#include "../mad/coordinateconversion.h"
-#include "../mad/arraymatrixtools.h"
+#include "../algo/collision_check_offline.h"  // only for signature parity in updateSuccessors3D
 #include "occupancy_grid.h"
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <type_traits>
-#include <iomanip>
 #include <vector>
-#include <sstream>
 
 namespace adore {
 namespace fun {
-
-    namespace bg = boost::geometry;
 
     template <int TYPE, typename T>
     class Node
     {
     private:
-        static const int N_suc = 3;
+        // Keep a small 2D holonomic set for API parity (unused by 3D pipeline)
+        static constexpr int N_suc = 3;
+        double dx_H[N_suc]{1.0, 1.0, 1.0};
+        double dy_H[N_suc]{ 1.0, 0.0,-1.0};
+        double dpsi_H[N_suc]{ M_PI/4.0, 0.0, -M_PI/4.0 };
 
-        // Holonomic successor offsets
-        double dx_H[N_suc];
-        double dy_H[N_suc];
-        double dpsi_H[N_suc];
+        // Non-holonomic parameters (cells/rad)
+        double R{2.0};     // radius proxy used with dA to produce ~1 cell forward
+        double dA{M_PI/4.0}; // primary heading increment (rad)
 
-        // Non-holonomic parameters
-        double R;   // Maximum turning radius
-        double dA;  // Dubins Curve Angle
+        // Costs (optional storage)
+        double G{0.0}, H{0.0};
 
-        // Stored costs
-        double G;   // cost so far (stored)
-        double H;   // cost to go (stored)
+        int type{TYPE};
 
-        int type;
-        double cp; // cos(psi)
-        double sp; // sin(psi)
-        long double pi, TWO_PI;
+        static constexpr double kPI   = 3.14159265358979323846;
+        static constexpr double kTWO_PI = 2.0 * kPI;
 
-        // helper: normalize angle into [0, TWO_PI)
-        static inline double normalizeAngle2Pi(double ang, double TWO_PI_local)
+        static double wrapToPi(double a)
         {
-            double a = std::fmod(ang, TWO_PI_local);
-            if (a < 0.0) a += TWO_PI_local;
+            while (a >  kPI) a -= kTWO_PI;
+            while (a < -kPI) a += kTWO_PI;
             return a;
         }
-
-    public:
-        double C;  // total cost G + H
-        T x;
-        T y;
-        double psi;
-        bool isClosed;
-        bool isOpen;
-        bool isVisited;
-        bool isGloballyVisited;
-        int index_depth;
-        int index_width;
-        int index_length;
-
-        Node()
+        static double lerpAngle(double a, double b, double t)
         {
-            type = TYPE;
-            G = 0.0;
-            H = 0.0;
-            isClosed = false;
-            isOpen = false;
-            isVisited = false;
-            isGloballyVisited = false;
-
-            R = 2.0;
-            dA = adore::mad::CoordinateConversion::DegToRad(45.0);
-
-            dx_H[0] = 1.0;
-            dx_H[1] = 1.0;
-            dx_H[2] = 1.0;
-
-            dy_H[0] = 1.0;
-            dy_H[1] = 0.0;
-            dy_H[2] = -1.0;
-
-            dpsi_H[0] = adore::mad::CoordinateConversion::DegToRad(45.0);
-            dpsi_H[1] = 0.0;
-            dpsi_H[2] = adore::mad::CoordinateConversion::DegToRad(-45.0);
-
-            pi = 3.141592653589793;
-            TWO_PI = 2.0 * pi;
-
-            index_depth = 0;
-            index_width = 0;
-            index_length = 0;
-            psi = 0.0;
-            x = static_cast<T>(0);
-            y = static_cast<T>(0);
-            C = 0.0;
+            const double da = wrapToPi(b - a);
+            return wrapToPi(a + t * da);
         }
+        static double angle_to_pipi(double a) { return wrapToPi(a); }
 
-        void set_R(double R_) { this->R = R_; }
-        void set_dA(double dA_) { this->dA = dA_; }
-        void set_G(double G_) { this->G = G_; }
-        void set_H(double H_) { this->H = H_; }
-
-        // normalize and set indices (clamps to grid bounds)
-        void update_index(int Width, int Length, int Depth, double HeadingResolutionRad)
+        // --- rectangular footprint raster check in CELL coordinates ---
+        static bool poseFootprintIsFreeCells(const adore::env::OccupanyGrid* og,
+                                             double cx, double cy, double psi,
+                                             double width_cells, double length_cells)
         {
-            double psi_norm = normalizeAngle2Pi(this->psi, static_cast<double>(TWO_PI));
-            int idx_depth = static_cast<int>(std::floor(psi_norm / HeadingResolutionRad));
-            if (idx_depth < 0) idx_depth = 0;
-            if (Depth > 0 && idx_depth >= Depth) idx_depth = Depth - 1;
-            index_depth = idx_depth;
+            const double hw = 0.5 * std::max(1.0, width_cells);
+            const double hl = 0.5 * std::max(1.0, length_cells);
 
-            // compute integer grid indices via floor (conservative)
-            int ix = static_cast<int>(std::floor(static_cast<double>(this->x)));
-            int iy = static_cast<int>(std::floor(static_cast<double>(this->y)));
+            const int xmin = static_cast<int>(std::floor(-hl));
+            const int xmax = static_cast<int>(std::ceil( hl));
+            const int ymin = static_cast<int>(std::floor(-hw));
+            const int ymax = static_cast<int>(std::ceil( hw));
 
-            if (Length > 0) {
-                ix = std::max(0, std::min(ix, Length - 1));
-            } else {
-                ix = 0;
+            const double c = std::cos(psi);
+            const double s = std::sin(psi);
+
+            for (int ix = xmin; ix <= xmax; ++ix) {
+                for (int iy = ymin; iy <= ymax; ++iy) {
+                    // rotate body offset -> grid offset
+                    const double rx = ix * c - iy * s;
+                    const double ry = ix * s + iy * c;
+
+                    const double gx = cx + rx;
+                    const double gy = cy + ry;
+
+                    const int row = static_cast<int>(std::floor(gy));
+                    const int col = static_cast<int>(std::floor(gx));
+
+                    if (!og->check_valid_position(row, col)) {
+                        return false;
+                    }
+                }
             }
-            if (Width > 0) {
-                iy = std::max(0, std::min(iy, Width - 1));
-            } else {
-                iy = 0;
-            }
-
-            index_length = ix;
-            index_width = iy;
-        }
-
-        // safer setPosition with bounds check and psi normalization
-        bool setPosition(double x_in, double y_in, double psi_in, int Width, int Length, int Depth, double HeadingResolutionRad)
-        {
-            const double eps = 1e-9;
-            if (!(x_in + eps >= 0.0 && x_in < static_cast<double>(Length) - eps &&
-                  y_in + eps >= 0.0 && y_in < static_cast<double>(Width) - eps))
-            {
-                std::cout << "\nWRONG COORDINATES: x=" << x_in << " y=" << y_in
-                          << " (expected x in [0," << Length << "), y in [0," << Width << "))\n";
-                return false;
-            }
-
-            if constexpr (std::is_integral<T>::value) {
-                this->x = static_cast<T>(std::floor(x_in));
-                this->y = static_cast<T>(std::floor(y_in));
-            } else {
-                this->x = static_cast<T>(x_in);
-                this->y = static_cast<T>(y_in);
-            }
-
-            this->psi = normalizeAngle2Pi(psi_in, static_cast<double>(TWO_PI));
-            this->update_index(Width, Length, Depth, HeadingResolutionRad);
-
             return true;
         }
 
-        bool hasEqualIndex(Node* node, double headingResolution) const
+        // Edge collision by sampling between two poses (cell space)
+        bool edgeCollisionFreeRect(const adore::env::OccupanyGrid* og,
+                                   double x0, double y0, double p0,
+                                   double x1, double y1, double p1) const
         {
-            double psi_a = normalizeAngle2Pi(node->psi, static_cast<double>(TWO_PI));
-            double psi_b = normalizeAngle2Pi(this->psi, static_cast<double>(TWO_PI));
-            int idx_a = static_cast<int>(std::floor(psi_a / headingResolution));
-            int idx_b = static_cast<int>(std::floor(psi_b / headingResolution));
-
-            int ix_a = static_cast<int>(std::floor(static_cast<double>(node->x)));
-            int iy_a = static_cast<int>(std::floor(static_cast<double>(node->y)));
-            int ix_b = static_cast<int>(std::floor(static_cast<double>(this->x)));
-            int iy_b = static_cast<int>(std::floor(static_cast<double>(this->y)));
-
-            return (idx_a == idx_b) && (iy_a == iy_b) && (ix_a == ix_b);
-        }
-
-        bool isEqual(Node* node, double headingResolution = 5.0, double tolerance = 0.1) const
-        {
-            if (this->type == 2) {
-                return (this->x == node->x && this->y == node->y);
-            }
-            if (this->type == 3) {
-                double dx = std::abs(static_cast<double>(this->x) - static_cast<double>(node->x));
-                double dy = std::abs(static_cast<double>(this->y) - static_cast<double>(node->y));
-                double dpsi = std::abs(this->psi - node->psi);
-                if (dpsi > TWO_PI - headingResolution) dpsi = TWO_PI - dpsi;
-                return (dx < tolerance && dy < tolerance && dpsi <= headingResolution);
-            }
-            return false;
-        }
-
-        bool isCloseTo(Node* node, double tolerance = 10.0) const
-        {
-            double dx = static_cast<double>(this->x) - static_cast<double>(node->x);
-            double dy = static_cast<double>(this->y) - static_cast<double>(node->y);
-            return (dx*dx + dy*dy) < (tolerance * tolerance);
-        }
-
-        // tentative G (does NOT modify stored G) - returns predecessor->G + step cost
-        double get_G(Node* predecessor) const
-        {
-            double dx = static_cast<double>(this->x) - static_cast<double>(predecessor->x);
-            double dy = static_cast<double>(this->y) - static_cast<double>(predecessor->y);
-            double EucDist = std::sqrt(dx*dx + dy*dy);
-            return predecessor->G + EucDist;
-        }
-
-        // stored G getter
-        double get_G() const { return this->G; }
-
-        // H computation: Euclidean distance (keeps same units as G)
-        double get_H(Node* goal)
-        {
-            double dx = static_cast<double>(this->x) - static_cast<double>(goal->x);
-            double dy = static_cast<double>(this->y) - static_cast<double>(goal->y);
-            this->H = std::sqrt(dx*dx + dy*dy);
-            return this->H;
-        }
-
-        void update_C() { this->C = this->G + this->H; }
-
-        // ---------- 2D succ (allocates) ----------
-        std::vector<Node<2,int>*> updateSuccessors2D(adore::env::OccupanyGrid* og)
-        {
-            int gridWidth = og->Grid.rows();
-            int gridLength = og->Grid.cols();
-
-            std::vector<Node<2,int>*> successors_h;
-            for (int i = 0; i < N_suc; ++i)
+            // Fallback: center-only validity at endpoints
+            if (s_center_only_collision)
             {
-                Node<2,int>* tmp = new Node<2,int>;
-                double new_x = static_cast<double>(this->x) + dx_H[i];
-                double new_y = static_cast<double>(this->y) + dy_H[i];
+                const int r0 = static_cast<int>(std::floor(y0));
+                const int c0 = static_cast<int>(std::floor(x0));
+                const int r1 = static_cast<int>(std::floor(y1));
+                const int c1 = static_cast<int>(std::floor(x1));
+                return og->check_valid_position(r0, c0) && og->check_valid_position(r1, c1);
+            }
 
-                if constexpr (std::is_integral<T>::value) {
-                    tmp->x = static_cast<int>(std::floor(new_x));
-                    tmp->y = static_cast<int>(std::floor(new_y));
-                } else {
-                    tmp->x = static_cast<int>(new_x);
-                    tmp->y = static_cast<int>(new_y);
-                }
+            // Convert robot footprint from meters to cells
+            const double res = std::max(1e-9, og->resolution);
+            const double width_cells_raw  = s_footprint_w_m / res;
+            const double length_cells_raw = s_footprint_l_m / res;
+#ifndef COLLISION_SHRINK_CELLS
+#define COLLISION_SHRINK_CELLS 1.0
+#endif
+            const double width_cells  = std::max(1.0, width_cells_raw  - 2.0*COLLISION_SHRINK_CELLS);
+            const double length_cells = std::max(1.0, length_cells_raw - 2.0*COLLISION_SHRINK_CELLS);
 
-                tmp->psi = dpsi_H[i];
-                tmp->set_G(this->G);
+            const double dx = x1 - x0;
+            const double dy = y1 - y0;
 
-                if (tmp->x >= 0 && tmp->x < gridLength && tmp->y >= 0 && tmp->y < gridWidth && og->Grid(tmp->y, tmp->x) < 1.0) {
-                    successors_h.push_back(tmp);
-                } else {
-                    // invalid -> free memory to avoid leak
-                    delete tmp;
+#ifndef COLLISION_STEP_CELLS
+#define COLLISION_STEP_CELLS 1.5
+#endif
+            const double step_cells = COLLISION_STEP_CELLS;
+            const int steps = std::max(1, static_cast<int>(std::ceil(std::max(std::fabs(dx), std::fabs(dy)) / step_cells)));
+
+            for (int s = 0; s <= steps; ++s)
+            {
+                const double t   = static_cast<double>(s) / static_cast<double>(steps);
+                const double xi  = x0 + t * dx;
+                const double yi  = y0 + t * dy;
+                const double psi = lerpAngle(p0, p1, t);
+
+                if (!poseFootprintIsFreeCells(og, xi, yi, psi, width_cells, length_cells)) {
+                    return false; // any sample collides -> block the edge
                 }
             }
-            return successors_h;
+            return true;
         }
 
-        // ---------- 3D succ (original return-by-vector) ----------
-        std::vector<Node<3,double>*> updateSuccessors3D(adore::env::OccupanyGrid* og,
-                                                       adore::fun::CollisionCheckOffline* cco,
-                                                       long double HeadingResolutionRad)
+        // helper to push a successor with a custom delta heading (d) and derived radius (R=1/d)
+        void push_arc(std::vector<Node<3,double>*>& out, double d) const
+        {
+            const double cp = std::cos(psi);
+            const double sp = std::sin(psi);
+            const double d_abs = std::max(1e-6, std::fabs(d));
+            const double Rloc = 1.0 / d_abs;
+            const double sign = (d >= 0.0) ? 1.0 : -1.0;
+            const double dpsi = sign * d_abs;
+
+            Node<3,double>* tmp = new Node<3,double>;
+            tmp->x   = x + Rloc * (std::sin(psi + dpsi) - sp);
+            tmp->y   = y + Rloc * (-std::cos(psi + dpsi) + cp);
+            tmp->psi = angle_to_pipi(psi + dpsi);
+            out.push_back(tmp);
+        }
+
+    public:
+        // --- Runtime-settable global knobs (per template instantiation) ---
+        inline static double s_footprint_w_m = 0.30;
+        inline static double s_footprint_l_m = 0.40;
+        inline static bool   s_enable_extra_turns      = true;  // adds ±0.5*dA and ±1.5*dA arcs
+        inline static bool   s_allow_reverse           = false; // adds backward straight step
+        inline static bool   s_center_only_collision   = false; // collision fallback
+
+        static void setFootprintMeters(double w, double l) {
+            s_footprint_w_m = std::max(0.05, w);
+            s_footprint_l_m = std::max(0.05, l);
+        }
+        static void enableExtraTurns(bool v){ s_enable_extra_turns = v; }
+        static void allowReverse(bool v){ s_allow_reverse = v; }
+        static void setCenterOnlyCollision(bool v){ s_center_only_collision = v; }
+
+        // Public state (kept for compatibility with existing code)
+        double C{0.0};
+        T x{0};
+        T y{0};
+        double psi{0.0};
+        bool isClosed{false};
+        bool isOpen{false};
+        bool isVisited{false};
+        bool isGloballyVisited{false};
+        int index_depth{0};
+        int index_width{0};
+        int index_length{0};
+
+        Node() = default;
+
+        // Set position helpers (for GraphSearchNode call sites)
+        void setPosition(double xx, double yy, double psi_) { x = static_cast<T>(xx); y = static_cast<T>(yy); psi = angle_to_pipi(psi_); }
+        void setPosition(int col, int row, double psi_)     { x = static_cast<T>(col); y = static_cast<T>(row); psi = angle_to_pipi(psi_); }
+
+        // 7-arg overload used in GraphSearchNode
+        void setPosition(double xx, double yy, double psi_,
+                         int Width, int Length, int Depth, double HeadingResolutionRad)
+        {
+            (void)Width; (void)Length;
+            x = static_cast<T>(xx);
+            y = static_cast<T>(yy);
+            psi = angle_to_pipi(psi_);
+            update_index(Width, Length, Depth, HeadingResolutionRad);
+        }
+
+        // Motion primitive parameters
+        void set_R(double R_)  { R = R_; }
+        void set_dA(double dA_){ dA = dA_; }
+        void set_G(double G_)  { G = G_; }
+        void set_H(double H_)  { H = H_; }
+
+        void update_index(int /*Width*/, int /*Length*/, int Depth, double HeadingResolutionRad)
+        {
+            int d = static_cast<int>(std::floor(psi / std::max(1e-9, HeadingResolutionRad)));
+            d %= Depth;
+            if (d < 0) d += Depth;
+
+            index_depth = d;
+            index_width  = static_cast<int>(std::floor(x));
+            index_length = static_cast<int>(std::floor(y));
+        }
+
+        double get_R() const { return R; }
+        double get_dA() const { return dA; }
+        double get_G() const { return G; }
+        double get_H() const { return H; }
+        double get_C() const { return C; }
+
+        // ---------- successor generation (holonomic 2D grid, API parity) ----------
+        std::vector<Node<2,int>*> updateSuccessorsH()
+        {
+            std::vector<Node<2,int>*> successors;
+            successors.reserve(N_suc);
+            for (int i = 0; i < N_suc; ++i) {
+                Node<2,int>* tmp = new Node<2,int>;
+                tmp->x = static_cast<int>(std::floor(this->x + dx_H[i]));
+                tmp->y = static_cast<int>(std::floor(this->y + dy_H[i]));
+                tmp->psi = 0.0;
+                successors.push_back(tmp);
+            }
+            return successors;
+        }
+
+        // ---------- non-holonomic successors (multi-action) ----------
+        std::vector<Node<3,double>*> updateSuccessorsNH() const
         {
             std::vector<Node<3,double>*> successors_nh;
-            this->R = 5.0;
+            successors_nh.reserve(9);
 
-            int gridWidth = og->Grid.rows();
-            int gridLength = og->Grid.cols();
-            int gridDepth = static_cast<int>(cco->offlineCollisionTable.size());
+            const double cp = std::cos(psi);
+            const double sp = std::sin(psi);
 
-            cp = std::cos(this->psi);
-            sp = std::sin(this->psi);
-
-            // candidate 0
-            {
+            auto push_straight = [&](){
                 Node<3,double>* tmp = new Node<3,double>;
-                tmp->x = this->x + this->R * (cp * this->dA);
-                tmp->y = this->y + this->R * (sp * this->dA);
-                tmp->psi = this->psi;
-                tmp->set_G(this->G);
-                tmp->update_index(gridWidth, gridLength, gridDepth, static_cast<double>(HeadingResolutionRad));
-                if (tmp->x >= 0.0 && tmp->x < gridLength && tmp->y >= 0.0 && tmp->y < gridWidth &&
-                    isCollisionFree(tmp, og, cco, HeadingResolutionRad))
-                {
-                    successors_nh.push_back(tmp);
-                } else {
-                    delete tmp;
-                }
+                // choose R so that R * dA ≈ 1 cell forward (planner sets R=1/dA)
+                tmp->x   = x + R * (cp * dA);
+                tmp->y   = y + R * (sp * dA);
+                tmp->psi = psi;
+                successors_nh.push_back(tmp);
+            };
+
+            // forward straight
+            push_straight();
+
+            // primary ±dA arcs
+            push_arc(successors_nh,  dA);
+            push_arc(successors_nh, -dA);
+
+            if (s_enable_extra_turns) {
+                // gentler ±0.5*dA arcs (bigger radius)
+                push_arc(successors_nh,  0.5*dA);
+                push_arc(successors_nh, -0.5*dA);
+                // sharper ±1.5*dA arcs (smaller radius)
+                push_arc(successors_nh,  1.5*dA);
+                push_arc(successors_nh, -1.5*dA);
             }
 
-            // candidate 1
-            {
-                Node<3,double>* tmp1 = new Node<3,double>;
-                tmp1->x = this->x + this->R * (std::sin(this->psi + this->dA) - sp);
-                tmp1->y = this->y + this->R * (-std::cos(this->psi + this->dA) + cp);
-                tmp1->psi = this->psi + this->dA;
-                tmp1->set_G(this->G);
-                tmp1->update_index(gridWidth, gridLength, gridDepth, static_cast<double>(HeadingResolutionRad));
-                if (tmp1->x >= 0.0 && tmp1->x < gridLength && tmp1->y >= 0.0 && tmp1->y < gridWidth &&
-                    isCollisionFree(tmp1, og, cco, HeadingResolutionRad))
-                {
-                    successors_nh.push_back(tmp1);
-                } else {
-                    delete tmp1;
-                }
-            }
-
-            // candidate 2
-            {
-                Node<3,double>* tmp2 = new Node<3,double>;
-                tmp2->x = this->x + this->R * (-std::sin(this->psi - this->dA) + sp);
-                tmp2->y = this->y + this->R * (std::cos(this->psi - this->dA) - cp);
-                tmp2->psi = this->psi - this->dA;
-                tmp2->set_G(this->G);
-                tmp2->update_index(gridWidth, gridLength, gridDepth, static_cast<double>(HeadingResolutionRad));
-                if (tmp2->x >= 0.0 && tmp2->x < gridLength && tmp2->y >= 0.0 && tmp2->y < gridWidth &&
-                    isCollisionFree(tmp2, og, cco, HeadingResolutionRad))
-                {
-                    successors_nh.push_back(tmp2);
-                } else {
-                    delete tmp2;
-                }
+            if (s_allow_reverse) {
+                // straight backward ~1 cell
+                Node<3,double>* tmp = new Node<3,double>;
+                tmp->x   = x - R * (cp * dA);
+                tmp->y   = y - R * (sp * dA);
+                tmp->psi = psi;
+                successors_nh.push_back(tmp);
             }
 
             return successors_nh;
         }
 
-        // ---------- 3D pool-fill overload (fills provided pointers, marks invalid with x=y=-1.0) ----------
-        // out_successors must contain at least 3 pointers to preallocated Node<3,double> objects.
-        void updateSuccessors3D(adore::env::OccupanyGrid* og,
-                                adore::fun::CollisionCheckOffline* cco,
-                                double HeadingResolutionRad,
+        // ---------- 3D pool-fill overload (kept for API parity) ----------
+        void updateSuccessors3D(adore::env::OccupanyGrid* /*og*/,
+                                adore::fun::CollisionCheckOffline* /*cco*/,
+                                double /*HeadingResolutionRad*/,
                                 std::vector<Node<3,double>*>& out_successors)
         {
-            if (out_successors.size() < 3) {
-                std::cerr << "[Node] updateSuccessors3D: out_successors.size() < 3\n";
-                return;
-            }
-
-            this->R = 5.0;
-            int gridWidth = og->Grid.rows();
-            int gridLength = og->Grid.cols();
-            int gridDepth = static_cast<int>(std::max<int>(1, static_cast<int>(cco->offlineCollisionTable.size())));
-
-            cp = std::cos(this->psi);
-            sp = std::sin(this->psi);
-
-            // candidate 0
-            {
-                Node<3,double>* tmp = out_successors[0];
-                tmp->x = this->x + this->R * (cp * this->dA);
-                tmp->y = this->y + this->R * (sp * this->dA);
-                tmp->psi = this->psi;
-                tmp->set_G(this->G);
-                tmp->update_index(gridWidth, gridLength, gridDepth, HeadingResolutionRad);
-
-                if (!(tmp->x >= 0.0 && tmp->x < gridLength && tmp->y >= 0.0 && tmp->y < gridWidth &&
-                      isCollisionFree(tmp, og, cco, HeadingResolutionRad)))
-                {
-                    tmp->x = -1.0; tmp->y = -1.0;
-                }
-            }
-
-            // candidate 1
-            {
-                Node<3,double>* tmp1 = out_successors[1];
-                tmp1->x = this->x + this->R * (std::sin(this->psi + this->dA) - sp);
-                tmp1->y = this->y + this->R * (-std::cos(this->psi + this->dA) + cp);
-                tmp1->psi = this->psi + this->dA;
-                tmp1->set_G(this->G);
-                tmp1->update_index(gridWidth, gridLength, gridDepth, HeadingResolutionRad);
-
-                if (!(tmp1->x >= 0.0 && tmp1->x < gridLength && tmp1->y >= 0.0 && tmp1->y < gridWidth &&
-                      isCollisionFree(tmp1, og, cco, HeadingResolutionRad)))
-                {
-                    tmp1->x = -1.0; tmp1->y = -1.0;
-                }
-            }
-
-            // candidate 2
-            {
-                Node<3,double>* tmp2 = out_successors[2];
-                tmp2->x = this->x + this->R * (-std::sin(this->psi - this->dA) + sp);
-                tmp2->y = this->y + this->R * (std::cos(this->psi - this->dA) - cp);
-                tmp2->psi = this->psi - this->dA;
-                tmp2->set_G(this->G);
-                tmp2->update_index(gridWidth, gridLength, gridDepth, HeadingResolutionRad);
-
-                if (!(tmp2->x >= 0.0 && tmp2->x < gridLength && tmp2->y >= 0.0 && tmp2->y < gridWidth &&
-                      isCollisionFree(tmp2, og, cco, HeadingResolutionRad)))
-                {
-                    tmp2->x = -1.0; tmp2->y = -1.0;
-                }
-            }
+            // Keep minimal behavior for legacy callers; not used by new planner
+            if (out_successors.size() < 3) return;
+            const double cp = std::cos(psi);
+            const double sp = std::sin(psi);
+            auto assign = [&](Node<3,double>* dst, double nx, double ny, double npsi)
+            { dst->x = nx; dst->y = ny; dst->psi = angle_to_pipi(npsi); };
+            assign(out_successors[0], x + R*(cp*dA),                 y + R*(sp*dA),                 psi);
+            assign(out_successors[1], x + R*(std::sin(psi+dA)-sp),   y + R*(-std::cos(psi+dA)+cp),  psi+dA);
+            assign(out_successors[2], x + R*(-std::sin(psi-dA)+sp),  y + R*( std::cos(psi-dA)-cp),  psi-dA);
         }
 
-        // checks collisions by consulting the offlineCollisionTable from cco
-        bool isCollisionFree(Node<3,double>* node,
-                             adore::env::OccupanyGrid* og,
-                             adore::fun::CollisionCheckOffline* cco,
-                             long double HeadingResolutionRad)
+        // ---------- collision queries ----------
+        bool isCollisionFreeCenter(const adore::env::OccupanyGrid* og) const
         {
-            int gridWidth = og->Grid.rows();
-            int gridLength = og->Grid.cols();
-            int Depth = static_cast<int>(cco->offlineCollisionTable.size());
-
-            // compute sub-cell indices (clamped)
-            int index_x = static_cast<int>(std::floor((node->x - std::floor(node->x)) * cco->NumberOfPointsPerAxis));
-            int index_y = static_cast<int>(std::floor((node->y - std::floor(node->y)) * cco->NumberOfPointsPerAxis));
-            index_x = std::max(0, std::min(index_x, cco->NumberOfPointsPerAxis - 1));
-            index_y = std::max(0, std::min(index_y, cco->NumberOfPointsPerAxis - 1));
-
-            // use node's depth index (safer)
-            int index_psi = node->index_depth;
-            if (index_psi < 0) index_psi = 0;
-            if (index_psi >= Depth) index_psi = Depth - 1;
-
-            // iterate offline table cells (table returns vector of offsets)
-            for (size_t i = 0; i < cco->offlineCollisionTable[index_psi](index_x, index_y).size(); ++i)
-            {
-                int X = int(std::floor(node->x)) + bg::get<0>(cco->offlineCollisionTable[index_psi](index_x, index_y)[i]);
-                int Y = int(std::floor(node->y)) + bg::get<1>(cco->offlineCollisionTable[index_psi](index_x, index_y)[i]);
-
-                if (X >= 0 && X < gridLength && Y >= 0 && Y < gridWidth)
-                {
-                    if (og->Grid(Y, X) > 0.900 || og->Grid(Y, X) < 0.0)
-                    {
-                        return false;
-                    }
-                }
-            }
-
-            return true;
+            const int row = static_cast<int>(std::floor(y));
+            const int col = static_cast<int>(std::floor(x));
+            return og->check_valid_position(row, col);
         }
 
+        bool isCollisionFreeRect(const adore::env::OccupanyGrid* og) const
+        {
+            if (s_center_only_collision) return isCollisionFreeCenter(og);
+
+            const double res = std::max(1e-9, og->resolution);
+            const double width_cells_raw  = s_footprint_w_m / res;
+            const double length_cells_raw = s_footprint_l_m / res;
+#ifndef COLLISION_SHRINK_CELLS
+#define COLLISION_SHRINK_CELLS 1.0
+#endif
+            const double width_cells  = std::max(1.0, width_cells_raw  - 2.0*COLLISION_SHRINK_CELLS);
+            const double length_cells = std::max(1.0, length_cells_raw - 2.0*COLLISION_SHRINK_CELLS);
+
+            return poseFootprintIsFreeCells(og, static_cast<double>(x), static_cast<double>(y), psi,
+                                            width_cells, length_cells);
+        }
+
+        bool isEdgeCollisionFreeRectTo(const adore::env::OccupanyGrid* og,
+                                       const Node<3,double>* target) const
+        {
+            return edgeCollisionFreeRect(og,
+                                         static_cast<double>(x), static_cast<double>(y), psi,
+                                         static_cast<double>(target->x), static_cast<double>(target->y), target->psi);
+        }
+
+        // ---------- helpers ----------
         Node<2,int>* nH2H() const
         {
             Node<2,int>* tmp = new Node<2,int>;
@@ -454,14 +351,13 @@ namespace fun {
         void print() const
         {
             std::cout << "\nnode: " << std::fixed << std::setprecision(6)
-                      << static_cast<double>(this->x) << "\t"
-                      << static_cast<double>(this->y) << "\t"
-                      << this->psi << "\t"
-                      << this->G << "\t"
-                      << this->H << "\t"
-                      << this->C << "\n";
+                      << static_cast<double>(x) << "\t"
+                      << static_cast<double>(y) << "\t"
+                      << psi << "\t"
+                      << G << "\t"
+                      << H << "\t"
+                      << C << "\n";
         }
-
     };
 
 } // namespace fun

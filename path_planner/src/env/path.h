@@ -15,14 +15,13 @@
 #pragma once
 #include <boost/container/vector.hpp>
 
+
+
 namespace adore
 {
     struct Node_Lite
             {
-                double x;
-                double y;
-                double psi;
-                double s;   //used only for smoothing
+                double x{0.0}, y{0.0}, psi{0.0}, s{0.0};
             };
     typedef boost::container::vector<Node_Lite> TrajectoryVector;
 }
